@@ -8,6 +8,7 @@ Chroma's default is squared L2, and `output-schema.md`'s confidence formula and
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from functools import cache
 
@@ -16,6 +17,20 @@ import numpy as np
 from autosupport.config import settings
 
 COLLECTION_NAME = "support_cases"
+_TAG_SLUG = re.compile(r"[^a-z0-9]+")
+
+
+def tag_metadata(tags: list[str]) -> dict:
+    """Chroma metadata for a case's tags: the joined list plus one boolean per tag slug
+    (Chroma can't filter inside a list). Same shape for dataset and agent-resolved cases."""
+    if not tags:
+        return {}
+    slugs = {"tag_" + _TAG_SLUG.sub("_", t.strip().lower()).strip("_"): True for t in tags}
+    return {"tags": ", ".join(tags), **slugs}
+
+
+def upsert(case_id: str, vector: np.ndarray, document: str, metadata: dict) -> None:
+    _collection().upsert(ids=[case_id], embeddings=[vector.tolist()], documents=[document], metadatas=[metadata])
 
 
 @dataclass

@@ -15,6 +15,7 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from autosupport.graph.evidence import evidence_context
+from autosupport.graph.memory import profile_block
 from autosupport.graph.state import AgentState, DraftResponse
 from autosupport.llm import main_llm
 from autosupport.skills import load_skill
@@ -47,10 +48,12 @@ def resolve(state: AgentState) -> dict:
         extra += "A reviewer rejected the previous draft — fix these: " + "; ".join(
             [*verification.issues, *verification.unsupported_claims]) + "\n\n"
 
+    # Long-term memory shapes the draft: honour stated preferences, don't re-offer a tried fix.
+    memory = profile_block(state.get("customer_profile"), state.get("customer_history", []))
     user_prompt = (
         f"Subject: {ticket.subject}\n\nBody: {ticket.body}\n\n"
         f"Classification: queue={classification.queue}, type={classification.type}, "
-        f"priority={classification.priority}\n\n{extra}"
+        f"priority={classification.priority}\n\nCustomer memory:\n{memory}\n\n{extra}"
         f"Evidence gathered during investigation:\n\n{evidence_block}"
     )
     output: DraftOutput = main_llm().with_structured_output(DraftOutput, method="json_schema").invoke(

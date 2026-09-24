@@ -1,8 +1,8 @@
 """Node 2: `load_memory` (graph-design.md, memory-design.md §3).
 
-Runs in parallel with `retrieve_initial`. At CP3, nothing has ever written `customers`
-(that's `update_memory`, CP6), so `customer_profile` is `None` for every customer until
-then — the expected common case, not an error."""
+Runs in parallel with `retrieve_initial` (disjoint keys). `customer_profile` is `None` for a
+customer's first ticket — the expected common case, not an error — and afterwards holds what
+`update_memory` kept under the write policy."""
 
 from __future__ import annotations
 

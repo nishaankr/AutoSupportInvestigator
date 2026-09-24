@@ -18,7 +18,7 @@ def search_similar_tickets(query: str, k: int = 8, queue: str | None = None) -> 
     hits = search(query, k=k, where=where)
     return [
         {
-            "case_id": h.case_id, "subject": h.subject, "queue": h.queue, "type": h.type,
+            "case_id": h.case_id, "source": h.source, "subject": h.subject, "queue": h.queue, "type": h.type,
             "priority": h.priority, "answer_class": h.answer_class, "cluster_size": h.cluster_size,
             "similarity": h.similarity, "score": h.score,
             "body_snippet": h.body_snippet, "answer_snippet": h.answer_snippet, "tags": h.tags,

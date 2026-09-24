@@ -366,6 +366,32 @@ while planning or verifying and recorded rather than silently absorbed.
 
 ---
 
+## D16 — CP6: memory write policy and corpus growth
+
+- **The memory write policy is code, not prompt.** `memory-design.md` §4 states rules W1–W6.
+  The model only proposes items; `graph/memory.apply_update` keeps an item only if (W1) its
+  verbatim `quote` is found in what the *customer* wrote (ticket, clarification answers,
+  rejection feedback), (W2) its key is in a closed vocabulary (6 fact keys, 3 preference
+  keys, plus tried fixes), and (W3) neither value nor quote matches the secrets/contact-PII
+  pattern. `repeat_unresolved` (W6) is a count over `cases`, recomputed every write. This
+  replaces the earlier draft's free-form `dict[str,str]` extraction, whose "keep both
+  conflicting preferences" rule was impossible on a dict and whose caps were needed only
+  because the keys were unbounded.
+- **Index policy: accepted resolutions only** (`case-persistence.md` §5.1). `not_required`
+  (eval runs) is excluded as well as escalated/rejected, so the agent's unconfirmed answers
+  never become evidence for later tickets and evals don't mutate their own corpus.
+- **Agent cases resolve through the same retrieval path.** `rag.queries._fetch_rows`
+  previously read only `dataset_tickets` and silently dropped any other hit; it now resolves
+  `T-` ids from `cases`, and `source` flows through `SearchResult` → `RetrievedCase`.
+- **Re-ingest preserves learned cases.** `rebuild_fts` now deletes only `source='dataset'`
+  rows (it used to wipe the whole FTS table on *every* ingest), and `--rebuild` re-indexes
+  `cases` rows with `indexed_at` set.
+- **One prompt rendering of memory** (`graph/memory.profile_block`) for `triage`,
+  `investigate` and `resolve`. `resolve` previously saw no profile at all, so a stated
+  preference or tried fix could not shape the customer-facing draft.
+
+---
+
 ## Open, pending data
 
 All items previously listed here are resolved, with measured numbers, in `rag-design.md`'s

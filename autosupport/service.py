@@ -10,7 +10,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from autosupport.graph.state import CaseResult, CaseStatus
+from autosupport.graph.state import CaseResult, CaseStatus, CaseSummary, CustomerMemory
 
 
 class IngestResult(BaseModel):
@@ -225,6 +225,28 @@ def show(ticket_id: str) -> TicketOutcome:
         ticket_id=row["ticket_id"], status=row["status"], result=result,
         pending_question=row["pending_question"], interrupt=interrupt,
     )
+
+
+class MemoryView(BaseModel):
+    """What `load_memory` would give this customer's next ticket (memory-design.md §3)."""
+
+    customer_id: str
+    profile: CustomerMemory | None
+    history: list[CaseSummary]
+
+
+def memory(customer_id: str) -> MemoryView:
+    from autosupport.store import cases as cases_repo
+    from autosupport.store import customers as customers_repo
+    from autosupport.store import db as store_db
+
+    conn = store_db.connect()
+    try:
+        profile = customers_repo.get(conn, customer_id)
+        history = cases_repo.history_for(conn, customer_id, exclude_ticket_id="")
+    finally:
+        conn.close()
+    return MemoryView(customer_id=customer_id, profile=profile, history=history)
 
 
 def list_cases(customer_id: str | None = None, awaiting: bool = False) -> list[CaseListItem]:

@@ -240,6 +240,7 @@ class CustomerMemory(BaseModel):   # full schema lives in memory-design.md
     flags: list[str] = []          # e.g. ["vip", "repeat_unresolved"]
     tried_fixes: list[str] = []
     preferences: dict[str, str] = {}
+    provenance: dict[str, str] = {} # "facts.<key>" -> ticket_id that wrote it; never rendered into prompts
 
 
 class CaseSummary(BaseModel):

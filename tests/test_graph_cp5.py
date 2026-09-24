@@ -10,6 +10,7 @@ import itertools
 import sqlite3
 from datetime import datetime, timezone
 
+import numpy as np
 import pytest
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
@@ -23,8 +24,11 @@ from autosupport.graph.nodes import investigate as investigate_node
 from autosupport.graph.nodes import refine_retrieval as refine_node
 from autosupport.graph.nodes import resolve as resolve_node
 from autosupport.graph.nodes import triage as triage_node
+from autosupport.graph.nodes import update_memory as memory_node
+from autosupport.graph.memory import MemoryUpdate, RememberedFact
 from autosupport.graph.nodes import verify as verify_node
 from autosupport.graph.state import ApproachCluster, EvidenceItem, TicketInput
+from autosupport.ingest import agent_index
 from autosupport.rag.queries import SearchResult
 from autosupport.store import db as store_db
 
@@ -82,6 +86,8 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(refine_node.rag_queries, "search", _hits)
     monkeypatch.setattr("autosupport.graph.nodes.tools.reanchor", lambda cases, _a: cases)
     monkeypatch.setattr(refine_node, "reanchor", lambda cases, _a: cases)
+    monkeypatch.setattr(agent_index, "embed", lambda texts: np.zeros((len(texts), 4), dtype=np.float32))
+    monkeypatch.setattr(agent_index.dense, "upsert", lambda *args: None)
     return tmp_path
 
 
@@ -109,6 +115,8 @@ def _wire(monkeypatch, *, sufficient: bool, verify_fails: bool, tools_per_turn: 
     monkeypatch.setattr(resolve_node, "main_llm", lambda: _Fake({"DraftOutput": draft}))
     monkeypatch.setattr(escalate_node, "main_llm", lambda: _Fake({"EscalateOutput": escalated}))
     monkeypatch.setattr(verify_node, "fast_llm", lambda: _Fake({"VerificationJudgement": verdict}))
+    memory = MemoryUpdate(facts=[RememberedFact(key="product", value="NAS", quote="NAS shares gone")], reasoning="r")
+    monkeypatch.setattr(memory_node, "fast_llm", lambda: _Fake({"MemoryUpdate": memory}))
 
 
 def _graph(tmp_path):
@@ -144,6 +152,12 @@ def test_happy_path_pauses_at_confirmation_then_accepts(env, monkeypatch):
     result = out["final_output"]
     assert (result.status, result.acceptance, result.verification.passed) == ("resolved", "accepted", True)
     assert result.confidence.band in ("medium", "high")
+    # CP6: the accepted resolution is indexed and the customer's memory written.
+    conn = store_db.connect()
+    assert conn.execute("SELECT indexed_at FROM cases").fetchone()["indexed_at"] is not None
+    assert conn.execute("SELECT source FROM dataset_tickets_fts WHERE case_id LIKE 'T-%'").fetchone()[0] == "agent_resolved"
+    assert '"product":"NAS"' in conn.execute("SELECT profile FROM customers").fetchone()[0]
+    conn.close()
 
 
 def test_rejection_loops_to_a_new_draft_then_exhausts_to_escalation(env, monkeypatch):
@@ -159,6 +173,9 @@ def test_rejection_loops_to_a_new_draft_then_exhausts_to_escalation(env, monkeyp
     out = graph.invoke(Command(resume={"accepted": False, "feedback": "still wrong"}), cfg)
     result = out["final_output"]  # max_revisions=1 spent -> escalate
     assert (result.status, result.escalation.trigger, result.acceptance) == ("escalated", "user_rejected", "rejected")
+    conn = store_db.connect()  # CP6: a rejected, escalated case never grows the corpus
+    assert conn.execute("SELECT indexed_at FROM cases").fetchone()["indexed_at"] is None
+    conn.close()
     assert result.stats.revisions == 2
 
 

@@ -4,7 +4,6 @@ embed canonicals -> Chroma upsert (architecture.md §4.1.2-4.1.6). The one entry
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -12,12 +11,13 @@ import numpy as np
 import pandas as pd
 
 from autosupport.config import settings
-from autosupport.ingest import classify, cluster, load
+from autosupport.ingest import agent_index, classify, cluster, load
+from autosupport.rag import dense
 from autosupport.rag.embedder import embed
+from autosupport.store import cases as cases_repo
 from autosupport.store import dataset_tickets, db
 
 _TAG_COLUMNS = [f"tag_{i}" for i in range(1, 9)]
-_TAG_SLUG = re.compile(r"[^a-z0-9]+")
 COLLECTION_NAME = "support_cases"
 
 
@@ -74,10 +74,6 @@ def _cluster_all(records: pd.DataFrame) -> pd.DataFrame:
     return records
 
 
-def _tag_slug(tag: str) -> str:
-    return "tag_" + _TAG_SLUG.sub("_", tag.strip().lower()).strip("_")
-
-
 def _chroma_metadata(row: pd.Series) -> dict:
     metadata = {
         "source": row["source"],
@@ -89,11 +85,7 @@ def _chroma_metadata(row: pd.Series) -> dict:
         "version": int(row["version"]) if pd.notna(row["version"]) else -1,
     }
     tags = [row[c] for c in _TAG_COLUMNS if pd.notna(row[c]) and row[c] != ""]
-    if tags:
-        metadata["tags"] = ", ".join(tags)
-        for tag in tags:
-            metadata[_tag_slug(tag)] = True
-    return metadata
+    return {**metadata, **dense.tag_metadata(tags)}
 
 
 def _upsert_chroma(records: pd.DataFrame, embed_vectors: np.ndarray, rebuild: bool) -> list[str]:
@@ -141,6 +133,11 @@ def run(limit: int | None = None, rebuild: bool = False) -> IngestReport:
     dataset_tickets.rebuild_fts(conn)
     indexed_ids = _upsert_chroma(records, embed_vectors, rebuild)
     dataset_tickets.mark_indexed(conn, indexed_ids)
+    if rebuild:
+        # --rebuild dropped the FTS5 table and the Chroma collection; put back what the agent
+        # learned at runtime (case-persistence.md §5.3).
+        for ticket_id in cases_repo.indexed_ticket_ids(conn):
+            agent_index.index_agent_case(conn, ticket_id, force=True)
 
     report = IngestReport(
         rows_loaded=rows_loaded,

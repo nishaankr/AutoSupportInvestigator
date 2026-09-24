@@ -19,7 +19,8 @@ from pydantic import BaseModel, Field
 
 from autosupport.graph.evidence import enrich
 from autosupport.graph.runconfig import run_setting
-from autosupport.graph.state import AgentState, CustomerMemory, EvidenceItem, Hypothesis, RetrievedCase
+from autosupport.graph.memory import profile_block
+from autosupport.graph.state import AgentState, EvidenceItem, Hypothesis, RetrievedCase
 from autosupport.llm import main_llm
 from autosupport.skills import load_skill
 from autosupport.store import db as store_db
@@ -111,21 +112,20 @@ def _context_block(state: AgentState) -> str:
     ticket = state["ticket"]
     classification = state["classification"]
     retrieved: list[RetrievedCase] = state.get("retrieved_cases", [])
-    profile: CustomerMemory | None = state.get("customer_profile")
 
     cases_block = "\n\n".join(
-        f"[{c.case_id}] subject={c.subject!r} answer_class={c.answer_class} "
+        f"[{c.case_id}] source={c.source} subject={c.subject!r} answer_class={c.answer_class} "
         f"cluster_size={c.cluster_size} similarity={c.similarity:.2f}\n"
         f"problem: {c.body_snippet}\nhistorical answer: {c.answer_snippet}"
         for c in retrieved
     ) or "(no retrieved cases yet — use search_similar_tickets)"
-    profile_block = f"facts={profile.facts}, flags={profile.flags}" if profile else "(no prior profile)"
+    memory = profile_block(state.get("customer_profile"), state.get("customer_history", []))
 
     return (
         f"Subject: {ticket.subject}\n\nBody: {ticket.body}\n\n"
         f"Classification: queue={classification.queue}, type={classification.type}, "
         f"priority={classification.priority}\n\n"
-        f"Customer profile: {profile_block}\n\n"
+        f"Customer memory:\n{memory}\n\n"
         f"Retrieved cases:\n\n{cases_block}"
     )
 

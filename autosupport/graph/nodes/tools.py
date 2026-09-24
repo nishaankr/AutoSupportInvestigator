@@ -63,7 +63,7 @@ def tools_node(state: AgentState) -> dict:
 def _to_retrieved_cases(hits: list[dict], round_: int) -> list[RetrievedCase]:
     return [
         RetrievedCase(
-            case_id=h["case_id"], source="dataset", subject=h["subject"],
+            case_id=h["case_id"], source=h["source"], subject=h["subject"],
             body_snippet=h["body_snippet"], answer_snippet=h["answer_snippet"],
             queue=h["queue"], type=h["type"], priority=h["priority"], tags=h["tags"],
             score=h["score"], similarity=h["similarity"], cluster_size=h["cluster_size"],

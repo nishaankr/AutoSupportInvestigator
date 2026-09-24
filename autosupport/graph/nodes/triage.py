@@ -17,6 +17,7 @@ from collections import Counter
 
 from pydantic import BaseModel, Field
 
+from autosupport.graph.memory import profile_block
 from autosupport.graph.state import AgentState, Classification, Priority, RetrievedCase
 from autosupport.llm import fast_llm
 from autosupport.skills import load_skill
@@ -47,15 +48,11 @@ def triage(state: AgentState) -> dict:
         f"- {c.case_id}: queue={c.queue}, type={c.type}, priority={c.priority}, similarity={c.similarity:.2f}"
         for c in retrieved[:10]
     ) or "(no retrieved neighbours)"
-    profile_block = (
-        f"facts={profile.facts}, flags={profile.flags}" if profile else "(no prior profile for this customer)"
-    )
-
     user_prompt = (
         f"Subject: {ticket.subject}\n\nBody: {ticket.body}\n\n"
         f"Customer-supplied priority: {ticket.customer_priority or '(none)'}\n"
         f"Customer-supplied tags: {ticket.customer_tags or '(none)'}\n\n"
-        f"Customer profile: {profile_block}\n\n"
+        f"Customer memory:\n{profile_block(profile, state.get('customer_history', []))}\n\n"
         f"Retrieved neighbours:\n{neighbour_block}"
     )
 

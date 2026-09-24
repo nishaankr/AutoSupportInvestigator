@@ -1,13 +1,11 @@
 # Case Persistence — the `cases` table
 
-> **Status:** Draft v1 · the system of record for every ticket the agent has seen.
+> **Status:** v2 · CP6. The system of record for every ticket the agent has seen, and (§5)
+> the policy for which of them grow the retrievable corpus.
 > **Companion docs:** `state-schema.md` (in-memory `AgentState`), `output-schema.md`
 > (`CaseResult`, the JSON stored in `final_output`), `graph-design.md` (node order),
 > `memory-design.md` (the sibling `customers` table).
-> **Scope:** CP3 needs `cases` to exist and to support `intake`/`persist_case`. Everything
-> here is built at CP3 except the `list --awaiting` query and `index_case`'s write, which
-> land when `ask_user` (CP5) and `index_case` (CP6) exist — the columns are reserved now so
-> the schema doesn't migrate later.
+> **Code:** `store/cases.py`, `ingest/agent_index.py` (§5), `graph/nodes/index_case.py`.
 
 ---
 
@@ -75,9 +73,10 @@ CREATE INDEX IF NOT EXISTS idx_cases_status ON cases(status);
 |---|---|---|
 | `intake` | `INSERT`: `ticket_id, customer_id, thread_id, status='open', subject, body, submitted_at, created_at, updated_at` (`classification`, `pending_question`, `final_output`, `indexed_at` all `NULL`) | The only `INSERT`. Runs once per ticket, before any interrupt (state-schema §4), so it can never run twice for the same `ticket_id` — see idempotency below. |
 | `triage` | `UPDATE cases SET classification=?, status='investigating', updated_at=? WHERE ticket_id=?` | |
-| `ask_user` (CP5) | `UPDATE cases SET status='awaiting_user', pending_question=?, updated_at=?` on interrupt; `UPDATE cases SET status='investigating', pending_question=NULL, updated_at=?` on resume | Not built at CP3; the columns exist now so this is additive later. |
+| `assess_evidence` / `verify` | `UPDATE cases SET status='awaiting_user', pending_question=?, updated_at=?` | The node that routes *into* an interrupt writes it — interrupt nodes have no side effects (graph-design.md §7.4). |
+| `service.resume_ticket` | `UPDATE cases SET status='investigating', pending_question=NULL, updated_at=?` | Before invoking `Command(resume=…)`, not inside the interrupt node. |
 | `persist_case` | `UPDATE cases SET final_output=?, status=?, updated_at=? WHERE ticket_id=?` | `status` is `final_output.status` ("resolved" or "escalated"), so the row and the JSON always agree — see the validator note below. |
-| `index_case` (CP6) | `UPDATE cases SET indexed_at=? WHERE ticket_id=?` | Only for accepted, resolved cases. |
+| `index_case` | `UPDATE cases SET indexed_at=? WHERE ticket_id=?` | Only for accepted, resolved cases (§5). |
 
 No node ever writes two different values to the same column in one run — each row above owns
 its own `UPDATE`, so there's no reducer question here the way there is for `AgentState`; SQLite
@@ -86,15 +85,14 @@ serialises writes to the same row.
 ### Status transitions
 
 ```
-open ──(triage)──► investigating ──(ask_user interrupt, CP5)──► awaiting_user
-                         ▲                                            │
-                         └────────────────(ask_user resume)───────────┘
-investigating ──(persist_case, decision=resolve, verify passed)──► resolved
+open ──(triage)──► investigating ──(→ ask_user / confirm_resolution)──► awaiting_user
+                         ▲                                                   │
+                         └──────────────────(service.resume_ticket)──────────┘
+investigating ──(persist_case, decision=resolve, verify passed)──► resolved ──(index_case, if accepted)──► indexed_at set
 investigating ──(persist_case, decision=escalate)──► escalated
 ```
 
-At CP3 (no `assess_evidence`/`ask_user`/`verify`) the only path a ticket takes is
-`open → investigating → resolved`. `persist_case` is the only writer of a terminal status, and
+`persist_case` is the only writer of a terminal status, and
 it writes exactly `final_output.status`, so `cases.status` and the persisted `CaseResult` can
 never disagree — this is the DB-level echo of the `CaseResult` model_validator in
 `output-schema.md` §5 (`status == "escalated"` iff `escalation.required`).
@@ -137,32 +135,52 @@ the graph on the existing `thread_id`, so it never touches this INSERT path.
 
 ---
 
-## 5. How an agent-resolved case reaches FTS5 / Chroma (CP6)
+## 5. How an agent-resolved case reaches FTS5 / Chroma (`index_case`)
 
-This is `index_case`'s job, not CP3's, but the shape is fixed now so `cases`' columns don't
-need to change later.
+`index_case` runs after `persist_case`, in parallel with `update_memory`. It writes no graph
+state, only Chroma, FTS5 and `cases.indexed_at`.
 
-- **Trigger:** `final_output.status == "resolved"` and `acceptance == "accepted"`
-  (`output-schema.md` §6). Escalated or rejected cases are never indexed.
-- **Chroma:** `index_case` embeds `subject + ". " + body` (the same embed-text rule as the
-  dataset, `rag-design.md` §3) and upserts into the single `support_cases` collection with
-  `id=ticket_id`, `metadata={"source": "agent_resolved", "queue": ..., "type": ...,
-  "priority": ..., "answer_class": "resolution", "cluster_size": 1, ...}` — the same metadata
-  shape dataset rows carry, so `rag/dense.py` and `rag/queries.py` don't need a source-specific
-  code path (`architecture.md` §2.1: "told apart by metadata").
-- **FTS5:** a row is inserted into `dataset_tickets_fts` (`rag-design.md` §6 — "a plain,
-  separately-populated FTS5 table is the only workable shape", built to receive rows from both
-  `dataset_tickets` and `cases`) with `case_id=ticket_id`, `source='agent_resolved'`,
-  `subject`/`body` = the ticket's normalised text, `answer` = the resolution text from
-  `final_output.resolution`, `tags` = the joined `classification.tags`, and the same
-  `queue`/`type`/`answer_class` `UNINDEXED` columns dataset rows carry.
-- **`cases.indexed_at`** is then set to the current timestamp, so a case is indexed at most
-  once — `index_case` first checks `indexed_at IS NULL` before doing either write, which also
-  makes the whole step safely re-runnable.
-- Once indexed, the case is retrievable by `rag/queries.search()` exactly like a dataset
-  canonical: `EvidenceEntry.source == "agent_resolved"` for citations of it
-  (`output-schema.md` §3.1), and it never re-enters `dataset_tickets` — that table stays a
-  read-only mirror of the HF ingest (`architecture.md` §2.2).
+### 5.1 The index policy: what grows the corpus
+
+**Indexed iff `final_output.status == "resolved"` and `acceptance == "accepted"`.**
+
+| Outcome | Indexed? | Why |
+|---|---|---|
+| Resolved, customer **accepted** | Yes | A verified draft (`accepted` is only reachable after `verify` passed) that a human confirmed. The only outcome that is evidence a fix works |
+| Escalated (any trigger) | No | No attested fix. The holding reply isn't a resolution |
+| Resolved after a rejection, then accepted | Yes | The *accepted* revision is what gets indexed |
+| Rejected, then escalated | No | Escalated |
+| Resolved, `acceptance == "not_required"` (eval runs, `require_acceptance=false`) | No | Unconfirmed. Indexing the agent's own unconfirmed answers would let a wrong fix be retrieved as evidence for the next ticket and reinforce itself. It would also make eval runs mutate the corpus they are measured against |
+
+What is indexed about an agent case is its **problem text and accepted resolution only** —
+never `customer_id`, customer facts, or clarification answers. The corpus is shared across
+customers; the profile is not (`memory-design.md` §1).
+
+### 5.2 Mechanics (`ingest/agent_index.py::index_agent_case`)
+
+- **Chroma:** embed `ticket_query_text(subject, body)` — the same normalise+embed-text rule as
+  the dataset (`rag-design.md` §3), so the case lives in the same vector space — and upsert
+  into `support_cases` with `id=ticket_id`, metadata `{source: "agent_resolved", queue, type,
+  priority, answer_class: "resolution", cluster_size: 1, version: -1, tags + tag slugs}`: the
+  shape dataset rows carry, so dense search and `where` filters need no source-specific path.
+- **FTS5:** one row in `dataset_tickets_fts` with `case_id=ticket_id`,
+  `source='agent_resolved'`, normalised subject/body, `answer` = normalised
+  `final_output.resolution`, `tags` = `classification.tags`, and the same `UNINDEXED`
+  `queue`/`type`/`answer_class` columns.
+- **`cases.indexed_at`** is set last. The node first checks `indexed_at IS NULL`, so a case is
+  indexed at most once and the step is re-runnable.
+- **Retrieval:** `rag/queries.search()` resolves `HF-` ids from `dataset_tickets` and `T-` ids
+  from `cases` (queue/type/priority/tags from `classification`, answer from
+  `final_output.resolution`), and every `SearchResult`/`RetrievedCase` carries `source`.
+  Citations of it enrich to `EvidenceEntry.source == "agent_resolved"` (output-schema.md
+  §3.1). Agent cases never enter `dataset_tickets`, which stays a mirror of the HF ingest.
+
+### 5.3 Surviving re-ingest
+
+The corpus grows at runtime, so ingest must not silently drop what was learned:
+- `dataset_tickets.rebuild_fts` deletes and re-inserts only `source = 'dataset'` rows.
+- `ingest --rebuild` drops the FTS5 table and the Chroma collection, so it finishes by
+  re-indexing every `cases` row with `indexed_at` set (`force=True`).
 
 ---
 

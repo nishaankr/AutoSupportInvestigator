@@ -186,7 +186,27 @@ def memory(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
     """Print the stored long-term memory for a customer."""
-    raise NotImplementedError
+    from autosupport import service
+
+    view = service.memory(customer_id)
+    if json_output:
+        typer.echo(view.model_dump_json())
+        return
+    profile = view.profile
+    if profile is None:
+        typer.echo(f"no stored memory for {customer_id}")
+    else:
+        for kind in ("facts", "preferences"):
+            typer.echo(f"{kind}:")
+            for key, value in getattr(profile, kind).items():
+                typer.echo(f"  {key}: {value}  (from {profile.provenance.get(f'{kind}.{key}', '?')})")
+        typer.echo("tried_fixes:")
+        for fix in profile.tried_fixes:
+            typer.echo(f"  - {fix}")
+        typer.echo(f"flags: {', '.join(profile.flags) or '(none)'}")
+    typer.echo("history:")
+    for h in view.history:
+        typer.echo(f"  {h.case_id}  {h.status:<14} {h.subject[:60]}")
 
 
 @app.command("eval")

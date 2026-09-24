@@ -199,6 +199,9 @@ class CustomerMemory(BaseModel):
     flags: list[str] = Field(default_factory=list)
     tried_fixes: list[str] = Field(default_factory=list)
     preferences: dict[str, str] = Field(default_factory=dict)
+    # "facts.<key>" / "preferences.<key>" -> ticket_id that last wrote it. Rendered by
+    # `autosupport memory`, never put into a prompt (memory-design.md §2).
+    provenance: dict[str, str] = Field(default_factory=dict)
 
 
 class CaseSummary(BaseModel):

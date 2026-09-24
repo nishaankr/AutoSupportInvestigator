@@ -9,8 +9,10 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from autosupport.ingest.text import index_body, index_text
 from autosupport.rag import dense, fusion, lexical
 from autosupport.rag.embedder import embed
+from autosupport.store import cases as cases_repo
 from autosupport.store import db as store_db
 
 OVERFETCH = 50
@@ -34,6 +36,7 @@ class SearchResult:
     body_snippet: str
     answer_snippet: str
     tags: list[str] = field(default_factory=list)
+    source: str = "dataset"  # or "agent_resolved" (case-persistence.md §5)
 
 
 def search(
@@ -100,7 +103,7 @@ def _search(
     results: list[SearchResult] = []
     for case_id in selected:
         row = rows.get(case_id)
-        if row is None:  # dataset_tickets and Chroma should never disagree, but don't crash a search over it
+        if row is None:  # the SQLite side and Chroma should never disagree, but don't crash a search over it
             continue
         similarity = dense_sim.get(case_id)
         if similarity is None:  # lexical-only hit — never scored by Chroma's query(), so backfill it
@@ -117,24 +120,41 @@ def _search(
                 type=row["type"],
                 priority=row["priority"],
                 answer_class=row["answer_class"],
-                cluster_size=row["cluster_size"] or 1,
-                body_snippet=(row["body_ix"] or "")[:SNIPPET_CHARS],
-                answer_snippet=(row["answer_ix"] or "")[:SNIPPET_CHARS],
-                tags=[row[c] for c in _TAG_COLUMNS if row[c]],
+                cluster_size=row["cluster_size"],
+                body_snippet=row["body_ix"][:SNIPPET_CHARS],
+                answer_snippet=row["answer_ix"][:SNIPPET_CHARS],
+                tags=row["tags"],
+                source=row["source"],
             )
         )
     return results
 
 
-def _fetch_rows(conn: sqlite3.Connection, case_ids: list[str]) -> dict[str, sqlite3.Row]:
-    if not case_ids:
-        return {}
-    placeholders = ",".join("?" for _ in case_ids)
-    columns = (
-        "case_id, subject, queue, type, priority, answer_class, cluster_size, body_ix, answer_ix, "
-        + ", ".join(_TAG_COLUMNS)
-    )
-    rows = conn.execute(
-        f"SELECT {columns} FROM dataset_tickets WHERE case_id IN ({placeholders})", case_ids
-    ).fetchall()
-    return {row["case_id"]: row for row in rows}
+def _fetch_rows(conn: sqlite3.Connection, case_ids: list[str]) -> dict[str, dict]:
+    """Display fields for each hit: `HF-` ids from `dataset_tickets`, `T-` ids (indexed
+    agent-resolved cases) from `cases` — the corpus grows at runtime (case-persistence.md §5)."""
+    dataset_ids = [c for c in case_ids if c.startswith("HF-")]
+    agent_ids = [c for c in case_ids if not c.startswith("HF-")]
+    out: dict[str, dict] = {}
+    if dataset_ids:
+        placeholders = ",".join("?" for _ in dataset_ids)
+        columns = (
+            "case_id, subject, queue, type, priority, answer_class, cluster_size, body_ix, answer_ix, "
+            + ", ".join(_TAG_COLUMNS)
+        )
+        for row in conn.execute(
+            f"SELECT {columns} FROM dataset_tickets WHERE case_id IN ({placeholders})", dataset_ids
+        ).fetchall():
+            out[row["case_id"]] = {
+                "subject": row["subject"], "queue": row["queue"], "type": row["type"],
+                "priority": row["priority"], "answer_class": row["answer_class"],
+                "cluster_size": row["cluster_size"] or 1, "body_ix": row["body_ix"] or "",
+                "answer_ix": row["answer_ix"] or "", "tags": [row[c] for c in _TAG_COLUMNS if row[c]],
+                "source": "dataset",
+            }
+    for case_id, row in cases_repo.agent_search_rows(conn, agent_ids).items():
+        out[case_id] = {
+            **row, "body_ix": index_body(row["body"]), "answer_ix": index_text(row["answer"]),
+            "source": "agent_resolved",
+        }
+    return out

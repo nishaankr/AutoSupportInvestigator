@@ -75,6 +75,46 @@ def get(conn: sqlite3.Connection, ticket_id: str) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM cases WHERE ticket_id = ?", (ticket_id,)).fetchone()
 
 
+def escalations_since(conn: sqlite3.Connection, customer_id: str, since: datetime) -> int:
+    """memory-design.md W6 `repeat_unresolved` count (ISO-8601 UTC strings compare in order)."""
+    return conn.execute(
+        "SELECT COUNT(*) FROM cases WHERE customer_id = ? AND status = 'escalated' AND updated_at >= ?",
+        (customer_id, since.isoformat()),
+    ).fetchone()[0]
+
+
+def mark_indexed(conn: sqlite3.Connection, ticket_id: str) -> None:
+    conn.execute("UPDATE cases SET indexed_at = ? WHERE ticket_id = ?", (_now(), ticket_id))
+    conn.commit()
+
+
+def indexed_ticket_ids(conn: sqlite3.Connection) -> list[str]:
+    return [r[0] for r in conn.execute("SELECT ticket_id FROM cases WHERE indexed_at IS NOT NULL").fetchall()]
+
+
+def agent_search_rows(conn: sqlite3.Connection, ticket_ids: list[str]) -> dict[str, dict]:
+    """Indexed agent cases in the same shape `rag/queries.py` reads from `dataset_tickets`,
+    so a `T-` search hit renders exactly like a dataset one (case-persistence.md §5.2)."""
+    if not ticket_ids:
+        return {}
+    placeholders = ",".join("?" for _ in ticket_ids)
+    rows = conn.execute(
+        f"SELECT ticket_id, subject, body, classification, final_output FROM cases "
+        f"WHERE ticket_id IN ({placeholders}) AND indexed_at IS NOT NULL",
+        ticket_ids,
+    ).fetchall()
+    out: dict[str, dict] = {}
+    for row in rows:
+        classification = Classification.model_validate_json(row["classification"])
+        result = CaseResult.model_validate_json(row["final_output"])
+        out[row["ticket_id"]] = {
+            "subject": row["subject"], "body": row["body"], "answer": result.resolution,
+            "queue": classification.queue, "type": classification.type, "priority": classification.priority,
+            "answer_class": "resolution", "cluster_size": 1, "tags": classification.tags,
+        }
+    return out
+
+
 def history_for(conn: sqlite3.Connection, customer_id: str, exclude_ticket_id: str, limit: int = 5) -> list[CaseSummary]:
     """The customer's open cases plus their last `limit` terminal (resolved/escalated)
     cases (state-schema.md §2.3), excluding the ticket that was just opened by `intake`

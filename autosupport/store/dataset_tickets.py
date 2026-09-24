@@ -36,9 +36,10 @@ def insert_all(conn: sqlite3.Connection, records: pd.DataFrame) -> None:
 
 
 def rebuild_fts(conn: sqlite3.Connection) -> None:
-    """Repopulates `dataset_tickets_fts` from canonical rows only — the retrievable set,
-    matching what gets embedded into Chroma, so RRF never double-counts a near-duplicate."""
-    conn.execute("DELETE FROM dataset_tickets_fts")
+    """Repopulates the dataset half of `dataset_tickets_fts` from canonical rows only — the
+    retrievable set, matching what gets embedded into Chroma, so RRF never double-counts a
+    near-duplicate. Agent-resolved rows are left alone (case-persistence.md §5.3)."""
+    conn.execute("DELETE FROM dataset_tickets_fts WHERE source = 'dataset'")
     rows = conn.execute(
         "SELECT case_id, source, subject_ix, body_ix, answer_ix, queue, type, answer_class, "
         "tag_1, tag_2, tag_3, tag_4, tag_5, tag_6, tag_7, tag_8 "
@@ -55,6 +56,21 @@ def rebuild_fts(conn: sqlite3.Connection) -> None:
             )
             for r in rows
         ],
+    )
+    conn.commit()
+
+
+def add_fts_row(
+    conn: sqlite3.Connection, case_id: str, source: str, subject: str, body: str, answer: str,
+    tags: list[str], queue: str, type_: str, answer_class: str,
+) -> None:
+    """One row into the shared FTS5 index — used for agent-resolved cases (`index_case`).
+    Replaces any existing row for `case_id` so a forced re-index can't duplicate it."""
+    conn.execute("DELETE FROM dataset_tickets_fts WHERE case_id = ?", (case_id,))
+    conn.execute(
+        "INSERT INTO dataset_tickets_fts (subject, body, answer, tags, case_id, source, queue, type, answer_class) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (subject, body, answer, " ".join(t.lower() for t in tags), case_id, source, queue, type_, answer_class),
     )
     conn.commit()
 
