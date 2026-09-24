@@ -48,6 +48,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS dataset_tickets_fts USING fts5(
     case_id UNINDEXED, source UNINDEXED, queue UNINDEXED, type UNINDEXED, answer_class UNINDEXED,
     tokenize = 'unicode61 remove_diacritics 2'
 );
+CREATE VIRTUAL TABLE IF NOT EXISTS dataset_tickets_fts_vocab USING fts5vocab(dataset_tickets_fts, 'row');
 """
 
 
@@ -59,6 +60,10 @@ def connect(rebuild: bool = False) -> sqlite3.Connection:
     conn = sqlite3.connect(settings.sqlite_path)
     conn.row_factory = sqlite3.Row
     if rebuild:
-        conn.executescript("DROP TABLE IF EXISTS dataset_tickets; DROP TABLE IF EXISTS dataset_tickets_fts;")
+        conn.executescript(
+            "DROP TABLE IF EXISTS dataset_tickets_fts_vocab;"
+            "DROP TABLE IF EXISTS dataset_tickets_fts;"
+            "DROP TABLE IF EXISTS dataset_tickets;"
+        )
     conn.executescript(_SCHEMA)
     return conn

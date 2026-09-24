@@ -105,7 +105,15 @@ def _upsert_chroma(records: pd.DataFrame, embed_vectors: np.ndarray, rebuild: bo
     client = chromadb.PersistentClient(path=str(settings.chroma_dir))
     if rebuild and COLLECTION_NAME in {c.name for c in client.list_collections()}:
         client.delete_collection(COLLECTION_NAME)
-    collection = client.get_or_create_collection(COLLECTION_NAME)
+    # Chroma's default HNSW space is squared L2, not cosine. embed_vectors are already
+    # L2-normalised (rag/embedder.py), so ranking order would come out the same either way,
+    # but the *value* Chroma reports as "distance" would be the wrong number — rag-design.md
+    # §9's tau_rel/SIM_CEILING and output-schema.md's confidence formula both compare against
+    # true cosine similarity, not an L2 distance transform of it. Set explicitly so `1 -
+    # distance` in dense.py is actually cosine similarity, not something that merely ranks
+    # the same. get_or_create_collection only applies this metadata on first creation; an
+    # existing collection created without it keeps its original (L2) space regardless.
+    collection = client.get_or_create_collection(COLLECTION_NAME, metadata={"hnsw:space": "cosine"})
 
     canonical_idx = np.where(records["is_canonical"].to_numpy())[0]
     collection.upsert(

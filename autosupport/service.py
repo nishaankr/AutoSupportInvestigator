@@ -32,3 +32,33 @@ def ingest(limit: int | None = None, rebuild: bool = False) -> IngestResult:
         cluster_size_distribution=report.cluster_size_distribution,
         duration_seconds=report.duration_seconds,
     )
+
+
+class SearchHit(BaseModel):
+    case_id: str
+    subject: str
+    queue: str
+    type: str
+    answer_class: str
+    cluster_size: int
+    similarity: float
+    score: float
+    dense_rank: int | None
+    lexical_rank: int | None
+
+
+def search(text: str, k: int = 10, queue: str | None = None) -> list[SearchHit]:
+    """CP2 temporary command (checkpoints.md) — exercises rag/queries.py end to end so hybrid
+    retrieval can be verified against the real corpus before the graph exists to call it."""
+    from autosupport.rag.queries import search as run_search
+
+    where = {"queue": queue} if queue else None
+    hits = run_search(text, k=k, where=where)
+    return [
+        SearchHit(
+            case_id=h.case_id, subject=h.subject, queue=h.queue, type=h.type,
+            answer_class=h.answer_class, cluster_size=h.cluster_size, similarity=h.similarity,
+            score=h.score, dense_rank=h.dense_rank, lexical_rank=h.lexical_rank,
+        )
+        for h in hits
+    ]

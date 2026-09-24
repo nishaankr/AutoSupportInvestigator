@@ -103,5 +103,35 @@ def demo(
     raise NotImplementedError
 
 
+@app.command()
+def search(
+    query: str = typer.Argument(..., help="Query text."),
+    k: int = typer.Option(10, "--k", help="Number of results."),
+    queue: Optional[str] = typer.Option(None, "--queue", help="Filter to one queue (dense arm only)."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """TEMPORARY (CP2, docs/project/checkpoints.md) — prints fused hybrid-retrieval results
+    with each arm's rank, the fused RRF score, similarity, cluster_size and answer_class.
+    Removed once the graph nodes that call rag/queries.py directly exist."""
+    from autosupport import service
+
+    hits = service.search(query, k=k, queue=queue)
+    if json_output:
+        typer.echo("[" + ", ".join(h.model_dump_json() for h in hits) + "]")
+        return
+    if not hits:
+        typer.echo("no results")
+        return
+    header = f"{'rank':<4} {'dense':<6} {'lex':<4} {'rrf':<8} {'sim':<6} {'cluster':<7} {'class':<21} case_id  subject"
+    typer.echo(header)
+    for i, h in enumerate(hits, start=1):
+        dense_r = str(h.dense_rank) if h.dense_rank else "-"
+        lex_r = str(h.lexical_rank) if h.lexical_rank else "-"
+        typer.echo(
+            f"{i:<4} {dense_r:<6} {lex_r:<4} {h.score:<8.4f} {h.similarity:<6.3f} "
+            f"{h.cluster_size:<7} {h.answer_class:<21} {h.case_id:<9} {h.subject[:60]}"
+        )
+
+
 if __name__ == "__main__":
     app()
