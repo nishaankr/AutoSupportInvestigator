@@ -74,8 +74,9 @@ Legend: **R** = reducer (`—` = overwrite) · **Writer** = the node(s) allowed 
 |---|---|---|---|---|
 | `decision` | `Literal["resolve","escalate"] \| None` | — | `assess_evidence`, `resolve`, `escalate` | |
 | `draft` | `DraftResponse \| None` | — | `resolve`, `escalate` | analysis, resolution text, escalation draft. Cited case IDs are never stored separately — they're extracted from the prose by the citation regex in `output-schema.md` §3.4. |
-| `confidence` | `Confidence \| None` | — | `verify` only | Computed deterministically from the evidence, not model-reported. `resolve` and `escalate` never write it. Formula, scale and bands in `output-schema.md` §4. **CP3 note:** there is no `verify` node yet, so `confidence`/`verification` are `None` for every CP3 run — see the CP3 entry in `decisions.md`. |
+| `confidence` | `Confidence \| None` | — | `verify` only | Computed deterministically from the evidence, not model-reported. `resolve` and `escalate` never write it. Formula, scale and bands in `output-schema.md` §4. |
 | `verification` | `VerificationResult \| None` | — | `verify` | passed, unsupported claims, `recommended_action` |
+| `escalation_trigger` | `EscalationTrigger \| None` | — | `escalate` only | Why `escalate` ran (output-schema.md §2.1 precedence), captured when it runs because a later `verify` pass would change what the precedence computes at persist time (decisions.md D15 F4). `persist_case` copies it into `EscalationBlock.trigger`. |
 | `verify_attempts` | `int` | — | `verify` | Loop D counter |
 
 ### 2.9 Acceptance & output
@@ -306,6 +307,7 @@ class AgentState(TypedDict, total=False):
     # decision / draft / verification
     decision: Literal["resolve", "escalate"] | None
     draft: DraftResponse | None
+    escalation_trigger: EscalationTrigger | None   # written only by escalate (D15 F4)
     confidence: Confidence | None      # output-schema.md §7; written only by verify
     verification: VerificationResult | None
     verify_attempts: int

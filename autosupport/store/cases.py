@@ -40,6 +40,29 @@ def set_classification(conn: sqlite3.Connection, ticket_id: str, classification:
     conn.commit()
 
 
+def set_status(
+    conn: sqlite3.Connection, ticket_id: str, status: CaseStatus, pending_question: str | None = None
+) -> None:
+    """Status transitions outside intake/triage/persist: `awaiting_user` (written by the node
+    that routes *into* an interrupt — graph-design.md §7.4) and back to `investigating`
+    (written by `service.resume_ticket`, never by the interrupt node itself)."""
+    conn.execute(
+        "UPDATE cases SET status = ?, pending_question = ?, updated_at = ? WHERE ticket_id = ?",
+        (status, pending_question, _now(), ticket_id),
+    )
+    conn.commit()
+
+
+def list_cases(conn: sqlite3.Connection, customer_id: str | None, awaiting: bool) -> list[sqlite3.Row]:
+    """case-persistence.md §4 `list` query; served by idx_cases_customer_updated / idx_cases_status."""
+    return conn.execute(
+        "SELECT ticket_id, customer_id, status, subject, pending_question, updated_at FROM cases "
+        "WHERE (? IS NULL OR customer_id = ?) AND (? = 0 OR status = 'awaiting_user') "
+        "ORDER BY updated_at DESC",
+        (customer_id, customer_id, int(awaiting)),
+    ).fetchall()
+
+
 def save_final(conn: sqlite3.Connection, ticket_id: str, result: CaseResult) -> None:
     conn.execute(
         "UPDATE cases SET final_output = ?, status = ?, updated_at = ? WHERE ticket_id = ?",

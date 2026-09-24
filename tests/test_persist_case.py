@@ -9,7 +9,9 @@ from datetime import datetime, timezone
 import pytest
 
 from autosupport.graph.nodes.persist_case import persist_case
-from autosupport.graph.state import Classification, DraftResponse, ToolCallRecord
+from autosupport.graph.state import (
+    Classification, Confidence, DraftResponse, ToolCallRecord, VerificationResult,
+)
 
 
 @pytest.fixture
@@ -39,6 +41,10 @@ def test_stats_tool_calls_counts_tool_log(sqlite_env):
         ),
         "draft": DraftResponse(analysis="a", resolution="r", escalation=None),
         "evidence": [],
+        "decision": "resolve",
+        "verification": VerificationResult(passed=True),
+        "confidence": Confidence(value=0.5, support=0.5, agreement=1.0, relevance=0.5, penalty=0.0),
+        "verify_attempts": 1,
         "retrieval_round": 1,
         "tool_log": [
             ToolCallRecord(name="search_similar_tickets", args={}, ok=True, duration_ms=1, round=1),

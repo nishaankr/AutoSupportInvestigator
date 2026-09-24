@@ -192,6 +192,12 @@ def classify_residue(answer: str, fast_llm) -> ResidueClassification:
     """LLM pass over rows the heuristic left as `residue`. `fast_llm` is a chat model
     already bound with `.with_structured_output(ResidueClassification)` — injected so this
     module has no import-time dependency on autosupport.llm, and so tests can pass a fake."""
+    if not index_text(answer):
+        # No content to classify (an empty answer, or one that was only anonymisation
+        # placeholders): the API rejects an empty user message, which crashed a full ingest.
+        # Nothing was said, so nothing was fixed or asked — the non-resolution default that
+        # rag-design.md §5 uses for anything the heuristic can't positively call a resolution.
+        return ResidueClassification(answer_class="escalation", rationale="empty answer: no content to classify")
     return fast_llm.invoke([
         {"role": "system", "content": _RESIDUE_SYSTEM_PROMPT},
         {"role": "user", "content": answer},

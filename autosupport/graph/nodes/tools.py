@@ -17,6 +17,7 @@ import time
 
 from langchain_core.messages import ToolMessage
 
+from autosupport.graph.retrieval import reanchor, ticket_text
 from autosupport.graph.state import AgentState, RetrievedCase, ToolCallRecord
 from autosupport.tools import build_tools
 
@@ -54,7 +55,8 @@ def tools_node(state: AgentState) -> dict:
         "messages": tool_messages,
         "tool_log": log_entries,
         "tool_calls_this_round": state.get("tool_calls_this_round", 0) + len(calls),
-        "retrieved_cases": new_cases,
+        # The model's search query isn't the ticket; re-anchor before merging (D15 F1).
+        "retrieved_cases": reanchor(new_cases, ticket_text(state["ticket"])) if new_cases else [],
     }
 
 

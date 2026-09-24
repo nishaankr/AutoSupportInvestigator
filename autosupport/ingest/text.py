@@ -46,6 +46,12 @@ def embed_text(subject_ix: str, body_ix: str) -> str:
     return f"{subject_ix}. {body_ix}" if subject_ix else body_ix
 
 
+def ticket_query_text(subject: str, body: str) -> str:
+    """A new ticket's text, normalised exactly like the corpus before embedding, so it
+    searches (and anchors similarity in) the same vector space the corpus was indexed into."""
+    return embed_text(index_text(subject), index_body(body))
+
+
 def derive_title(body_ix: str, max_chars: int = 90) -> str:
     """Display title for a subjectless record: the first sentence of the normalised body,
     truncated. Never fed into a vector or FTS5 index — display only."""

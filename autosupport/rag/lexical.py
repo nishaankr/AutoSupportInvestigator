@@ -49,16 +49,39 @@ def query_terms(conn: sqlite3.Connection, text: str, n_docs: int) -> list[str]:
     return [t for t, _ in scored[:BM25_TERMS]]
 
 
-def search(conn: sqlite3.Connection, text: str, n: int = 50) -> list[LexicalHit]:
-    """Top-`n` canonicals by BM25 over the query's rarest terms."""
+# UNINDEXED FTS5 columns a caller may filter on (rag-design.md §6, §10 V2/V4). Whitelisted
+# because the column name is interpolated into SQL.
+FILTERABLE_COLUMNS = frozenset({"queue", "type", "answer_class", "source"})
+
+
+def search(
+    conn: sqlite3.Connection,
+    text: str,
+    n: int = 50,
+    where: dict | None = None,
+    phrases: tuple[str, ...] | list[str] = (),
+) -> list[LexicalHit]:
+    """Top-`n` canonicals by BM25 over the query's rarest terms, plus any `phrases` forced
+    in as quoted matches (rag-design.md §10 V1/V3: entities from a clarification answer or
+    keywords from a hypothesis rewrite). `where` filters on UNINDEXED metadata columns."""
     n_docs = conn.execute("SELECT COUNT(*) FROM dataset_tickets_fts").fetchone()[0]
     terms = query_terms(conn, text, n_docs)
-    if not terms:
+    quoted = [f'"{t}"' for t in terms] + [_quote_phrase(p) for p in phrases if _quote_phrase(p)]
+    if not quoted:
         return []
-    match_expr = " OR ".join(f'"{t}"' for t in terms)
+    filters = where or {}
+    unknown = set(filters) - FILTERABLE_COLUMNS
+    if unknown:
+        raise ValueError(f"unfilterable lexical columns: {sorted(unknown)}")
+    predicate = "".join(f" AND {col} = ?" for col in filters)
     rows = conn.execute(
         "SELECT case_id, bm25(dataset_tickets_fts) FROM dataset_tickets_fts "
-        "WHERE dataset_tickets_fts MATCH ? ORDER BY bm25(dataset_tickets_fts) LIMIT ?",
-        (match_expr, n),
+        f"WHERE dataset_tickets_fts MATCH ?{predicate} ORDER BY bm25(dataset_tickets_fts) LIMIT ?",
+        (" OR ".join(quoted), *filters.values(), n),
     ).fetchall()
     return [LexicalHit(case_id=case_id, bm25_score=score) for case_id, score in rows]
+
+
+def _quote_phrase(phrase: str) -> str:
+    tokens = _TOKEN.findall(unicodedata.normalize("NFKC", phrase).lower())
+    return f'"{" ".join(tokens)}"' if tokens else ""

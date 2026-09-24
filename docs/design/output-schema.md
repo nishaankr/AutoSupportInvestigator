@@ -27,7 +27,7 @@
 | `analysis` | `str` | model | Written for a support agent: the hypothesis, how the evidence agreed or conflicted, and what was ruled out. Cites case IDs inline (§3.4). |
 | `resolution` | `str` | model | The customer-facing reply. For a resolved case, the steps, each citing the case it came from. For an escalated case, the holding reply saying what happens next. It never contains an invented fix. |
 | `escalation` | `EscalationBlock` | mixed | §2.1 |
-| `confidence` | `Confidence` | code | §4. **CP3 note:** `Confidence \| None` and `VerificationOutcome \| None` until `verify` exists (CP5) — see the CP3 entry in `decisions.md`. Required again once `verify` is the gate every path passes through. |
+| `confidence` | `Confidence` | code | §4. |
 | `verification` | `VerificationOutcome` | code | Written by `verify`: `passed`, `attempts`, `unresolved_issues`. `unresolved_issues` is non-empty only for an escalation persisted after the verify retries ran out (`graph-design.md` §4.2). |
 | `acceptance` | `"accepted" \| "rejected" \| "not_required"` | code | `not_required` means `confirm_resolution` never ran. That covers every escalation that didn't follow a rejection, and resolutions run with `require_acceptance=false`. |
 | `clarifications` | `list[ClarificationTurn]` | code | Copied from state: the questions and answers that shaped the result |

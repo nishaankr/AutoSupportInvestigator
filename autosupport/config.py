@@ -52,7 +52,9 @@ class Settings(BaseSettings):
     max_revisions: int = 1
     tau_rel: float = 0.76  # measured random-pair p95 (rag-design.md §9), not a guess
     require_acceptance: bool = True
-    recursion_limit: int = 60
+    # Worst single invocation is ~70 supersteps (graph-design.md §6 derivation); 100 keeps the
+    # recursion limit a pure backstop that never fires before a loop counter does (D15 F2).
+    recursion_limit: int = 100
 
     @field_validator("main_model", "fast_model")
     @classmethod

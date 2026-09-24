@@ -35,7 +35,7 @@ _CAP_CONFLICTING = ("conflicting", 0.60)
 _CAP_VERIFICATION_FAILED = ("verification_failed", 0.30)
 
 
-def _cluster_weight(cluster_size: int) -> float:
+def cluster_weight(cluster_size: int) -> float:
     return min(1.0 + math.log2(cluster_size), W_MAX)
 
 
@@ -57,8 +57,8 @@ def compute_confidence(
     supports = [e for e in evidence if e.stance == "supports"]
     contradicts = [e for e in evidence if e.stance == "contradicts"]
 
-    w_s = sum(_cluster_weight(e.cluster_size) for e in supports if _substantive(e))
-    w_c = sum(_cluster_weight(e.cluster_size) for e in contradicts if _substantive(e))
+    w_s = sum(cluster_weight(e.cluster_size) for e in supports if _substantive(e))
+    w_c = sum(cluster_weight(e.cluster_size) for e in contradicts if _substantive(e))
 
     support = 1.0 - math.exp(-w_s / K)
     agreement = w_s / (w_s + w_c) if (w_s + w_c) > 0 else 0.0

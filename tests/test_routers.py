@@ -1,4 +1,4 @@
-"""`route_after_investigate` (graph-design.md §4.2, CP4 deviation noted in routers.py)."""
+"""`route_after_investigate` (graph-design.md §4.2)."""
 
 from __future__ import annotations
 
@@ -17,12 +17,12 @@ def test_routes_to_tools_when_tool_calls_present_and_budget_left():
     assert route_after_investigate(state, _config(6)) == "tools"
 
 
-def test_routes_to_resolve_when_no_tool_calls():
+def test_routes_to_assess_when_no_tool_calls():
     state = {"messages": [AIMessage(content="done")], "tool_calls_this_round": 0}
-    assert route_after_investigate(state, _config(6)) == "resolve"
+    assert route_after_investigate(state, _config(6)) == "assess_evidence"
 
 
-def test_routes_to_resolve_when_budget_exhausted_even_with_tool_calls():
+def test_routes_to_assess_when_budget_exhausted_even_with_tool_calls():
     state = {"messages": [AIMessage(content="", tool_calls=[{"name": "x", "args": {}, "id": "1"}])],
              "tool_calls_this_round": 6}
-    assert route_after_investigate(state, _config(6)) == "resolve"
+    assert route_after_investigate(state, _config(6)) == "assess_evidence"

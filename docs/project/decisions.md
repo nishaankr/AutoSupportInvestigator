@@ -322,6 +322,50 @@ these two models.
 
 ---
 
+## D15 — CP5: loops, interrupts, verification — deviations from graph-design.md
+
+Everything in graph-design.md §4-§8 is built as written except the following, each found
+while planning or verifying and recorded rather than silently absorbed.
+
+- **F1 — `similarity` is re-anchored to the ticket.** `rag.queries.search` scores similarity
+  against its *own query*; for a hypothesis rewrite or a tool search that isn't the ticket, yet
+  `merge_cases` dedups on it and `assess_evidence` thresholds it against τ_rel. Every node that
+  merges results (`retrieve_variant`, `tools`) recomputes it against the ticket embedding
+  (`dense.similarities_to`, `graph/retrieval.py`). This also corrects CP4's `tools` merge.
+- **F2 — `recursion_limit` 60 → 100.** Measured worst case is 69 node executions in one
+  invocation (graph-design.md §6); 60 would have fired before a loop counter routed to `escalate`.
+- **F3 — the "conflicting: top-queue share < 0.5" test is recomputed over the current
+  *relevant* cases**, not triage's frozen round-1 `neighbor_agreement`, which refinement could
+  otherwise never move.
+- **F4 — new state key `escalation_trigger`**, written only by `escalate`.
+- **F5 — a clarification-led dominant cluster is `insufficient`.** If ≥60% (weighted) of the
+  dominant cluster's answers are `clarification_request`, it says what to ask, not how to fix
+  (D5). Escalation-led dominant clusters are the `dominant_cluster_escalated` rule.
+- **F6 — tool calls in one message run sequentially** inside the `tools` node (D14), not as
+  parallel branches; the only genuinely parallel writers are `load_memory ∥ retrieve_initial`
+  (disjoint keys) and the `retrieve_variant` Sends (`retrieved_cases` = `merge_cases`,
+  `retrieval_queries`/`errors` = `operator.add`).
+- **F7 — `route_after_confirm` uses `revision_count <= max_revisions`.** `confirm_resolution`
+  increments the counter on the rejection it is handling, so graph-design.md's literal `<`
+  would allow zero revised drafts with `max_revisions = 1`.
+- **F8 — `gap_is_retrievable` is defined narrowly in the assess prompt.** A live run showed the
+  model marking a thin ticket's gap "retrievable", so the run burned both refinement rounds
+  *before* asking, leaving no round for the customer's answer to drive V1
+  (`clarification_keywords`). The prompt now says a gap that is a fact only the customer has is
+  not retrievable, matching graph-design.md §5's own "missing slot" definition. Verified: the
+  thin-ticket run asks at `retrieval_round = 1` and V1 fires after the answer.
+- **`escalate_ticket` (CP4's advisory flag) now feeds `escalation_rule_hit`** as
+  `action_beyond_agent`, as does the model's `requires_human_action` judgement.
+- **Retrieval filters reach both arms.** `rag/lexical.search` gained a whitelisted `where` and
+  forced `phrases`, and `rag.queries.search` passes `where` to the lexical arm too — before,
+  V2/V4's filter only constrained the dense arm and the lexical arm leaked unfiltered hits.
+- **Bugs found in live verification:** `dense.similarities_to` raised `DuplicateIDError` when
+  two searches in one turn shared a hit (deduped, regression test); `--json > file` crashed on
+  a model-emitted `→` under cp1252 after the graph had finished (CLI output is now always
+  UTF-8); `escalate` did not show the customer's clarification answers to the model (fixed).
+
+---
+
 ## Open, pending data
 
 All items previously listed here are resolved, with measured numbers, in `rag-design.md`'s

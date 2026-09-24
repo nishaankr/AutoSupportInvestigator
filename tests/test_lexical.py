@@ -62,3 +62,24 @@ def test_search_empty_query_returns_nothing(conn):
     # every token here (the, and, a) is common enough to be excluded as boilerplate,
     # or too short (<2 chars) to be a candidate at all.
     assert search(conn, "a", n=10) == []
+
+
+def test_search_where_filters_on_unindexed_metadata_and_rejects_unknown_columns(conn):
+    assert search(conn, "QNAP NAS problem", n=10, where={"queue": "Technical Support"})
+    assert search(conn, "QNAP NAS problem", n=10, where={"queue": "Billing and Payments"}) == []
+    with pytest.raises(ValueError):
+        search(conn, "QNAP NAS problem", where={"body; DROP TABLE x": "1"})
+
+
+def test_search_forces_quoted_phrases_even_when_the_text_has_no_rare_terms(conn):
+    hits = search(conn, "a", n=10, phrases=["QNAP NAS"])
+    assert hits and hits[0].case_id == "HF-1"
+
+
+def test_ask_user_payload_is_a_pure_function_of_the_checkpoint():
+    """Interrupt nodes re-run from the top on resume (graph-design.md §7.3): the pre-interrupt
+    payload must rebuild identically, so the customer sees the question they answered."""
+    from autosupport.graph.nodes.ask_user import build_payload
+
+    state = {"ticket_id": "T-1", "pending_question": "Which version?"}
+    assert build_payload(state) == build_payload(state)

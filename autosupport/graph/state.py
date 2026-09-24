@@ -3,12 +3,9 @@
 defers `CaseResult`/`Confidence`/etc. to `output-schema.md` to avoid a second copy drifting
 out of sync — this file is that single copy.
 
-CP3 deviates from the doc sketches in two places, both tracked in `docs/project/decisions.md`
-and reflected in the docs themselves:
-- `confidence`/`verification` are `Optional` until `verify` exists (CP5) — see module
-  docstring on `Confidence` below.
-- `TicketInput.submitted_at`/`ClarificationTurn.asked_at` use a timezone-aware factory,
-  not the deprecated `datetime.utcnow`.
+Deviations from the doc sketches, tracked in `docs/project/decisions.md` and reflected in the
+docs: `TicketInput.submitted_at`/`ClarificationTurn.asked_at` use a timezone-aware factory,
+not the deprecated `datetime.utcnow`; `AgentState.escalation_trigger` is added (D15 F4).
 """
 
 from __future__ import annotations
@@ -157,11 +154,8 @@ class DraftResponse(BaseModel):
 
 
 class Confidence(BaseModel):
-    """output-schema.md §4.6. Required on `CaseResult` in the full design — computed only by
-    `verify` (§4.5). CP3 has no `verify` node, so `graph/confidence.py` is written and unit-
-    tested now, but nothing calls it yet; `CaseResult.confidence` is `Confidence | None` until
-    CP5 makes `verify` the gate every path passes through, at which point it becomes required
-    again (docs/project/decisions.md CP3 entry)."""
+    """output-schema.md §4.6. Computed only by `verify` (§4.5); every path to
+    `persist_case` passes through `verify`, so `CaseResult.confidence` is required."""
 
     value: float = Field(ge=0, le=1)
     support: float
@@ -233,8 +227,8 @@ class CaseResult(BaseModel):
     analysis: str
     resolution: str
     escalation: EscalationBlock
-    confidence: Confidence | None = None  # required from CP5 (see Confidence docstring)
-    verification: VerificationOutcome | None = None  # required from CP5
+    confidence: Confidence
+    verification: VerificationOutcome
     acceptance: Literal["accepted", "rejected", "not_required"]
     clarifications: list[ClarificationTurn] = Field(default_factory=list)
     stats: RunStats
@@ -329,6 +323,9 @@ class AgentState(TypedDict, total=False):
     # decision / draft / verification
     decision: Literal["resolve", "escalate"] | None
     draft: DraftResponse | None
+    # Written only by `escalate`, captured when it runs: a later verify pass would change what
+    # output-schema.md §2.1's precedence computes at persist time (decisions.md D15 F4).
+    escalation_trigger: EscalationTrigger | None
     confidence: Confidence | None
     verification: VerificationResult | None
     verify_attempts: int

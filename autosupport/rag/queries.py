@@ -41,31 +41,37 @@ def search(
     k: int = 10,
     where: dict | None = None,
     conn: sqlite3.Connection | None = None,
+    phrases: tuple[str, ...] | list[str] = (),
 ) -> list[SearchResult]:
-    """Dense + BM25 -> RRF -> MMR, in one call. `where` is a Chroma metadata filter applied
-    to the dense arm (e.g. `{"queue": "Technical Support"}` for the queue-filtered second-pass
-    variant, rag-design.md §10 V4) — the lexical arm's `UNINDEXED` columns support the same
-    kind of filter but CP2's plain search leaves it unfiltered there; a filtered lexical
-    query is added when the graph nodes that need it are built.
+    """Dense + BM25 -> RRF -> MMR, in one call. `where` is a single-key metadata filter
+    (e.g. `{"queue": "Technical Support"}` or `{"answer_class": "resolution"}`, rag-design.md
+    §10 V2/V4) applied to **both** arms — Chroma metadata on the dense side, the FTS5
+    `UNINDEXED` columns on the lexical side — so a filtered variant never leaks unfiltered
+    lexical hits. `phrases` are forced quoted BM25 matches (V1/V3).
 
-    `conn` lets a caller reuse an open connection (e.g. across several `refine_retrieval`
-    variants in one graph superstep); if omitted, one is opened and closed here.
+    `similarity` in the result is cosine to *this query's* text. Graph nodes that merge
+    results into `retrieved_cases` re-anchor it to the ticket (`dense.similarities_to`),
+    since state-schema.md §2.5 defines it as similarity to the ticket.
+
+    `conn` lets a caller reuse an open connection; if omitted, one is opened and closed here.
     """
     own_conn = conn is None
     if own_conn:
         conn = store_db.connect()
     try:
-        return _search(conn, text, k, where)
+        return _search(conn, text, k, where, phrases)
     finally:
         if own_conn:
             conn.close()
 
 
-def _search(conn: sqlite3.Connection, text: str, k: int, where: dict | None) -> list[SearchResult]:
+def _search(
+    conn: sqlite3.Connection, text: str, k: int, where: dict | None, phrases
+) -> list[SearchResult]:
     query_vector = embed([text])[0]
 
     dense_hits = dense.search(query_vector, n=OVERFETCH, where=where)
-    lexical_hits = lexical.search(conn, text, n=OVERFETCH)
+    lexical_hits = lexical.search(conn, text, n=OVERFETCH, where=where, phrases=phrases)
     dense_ids = [h.case_id for h in dense_hits]
     lexical_ids = [h.case_id for h in lexical_hits]
 

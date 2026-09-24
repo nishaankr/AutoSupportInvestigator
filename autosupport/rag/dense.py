@@ -54,6 +54,20 @@ def search(query_vector: np.ndarray, n: int = 50, where: dict | None = None) -> 
     ]
 
 
+def similarities_to(case_ids: list[str], query_vector: np.ndarray) -> dict[str, float]:
+    """Batched `similarity_to`: cosine between each case's stored embedding and
+    `query_vector`, in one Chroma round-trip. Used to re-anchor `RetrievedCase.similarity`
+    to the ticket for results found by a different query (a rewrite, a tool search)."""
+    unique = list(dict.fromkeys(case_ids))  # Chroma rejects duplicate IDs; two searches can share a hit
+    if not unique:
+        return {}
+    record = _collection().get(ids=unique, include=["embeddings"])
+    return {
+        cid: float(np.asarray(vec, dtype=np.float32) @ query_vector)
+        for cid, vec in zip(record["ids"], record["embeddings"])
+    }
+
+
 def similarity_to(case_id: str, query_vector: np.ndarray) -> float | None:
     """Cosine similarity between one specific case's stored embedding and `query_vector` —
     used to backfill `RetrievedCase.similarity` for a lexical-only hit (rag-design.md §7),

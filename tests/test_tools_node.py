@@ -7,6 +7,7 @@ import autosupport.tools.search_similar_tickets as search_tool_module
 from langchain_core.messages import AIMessage
 
 from autosupport.graph.nodes.tools import tools_node
+from autosupport.graph.state import TicketInput
 from autosupport.rag.queries import SearchResult
 
 
@@ -23,13 +24,14 @@ def _stub_search(_text, k=10, where=None, conn=None):
 
 def test_tools_node_executes_search_and_merges_retrieved_cases(monkeypatch):
     monkeypatch.setattr(search_tool_module, "search", _stub_search)
+    monkeypatch.setattr("autosupport.graph.nodes.tools.reanchor", lambda cases, _anchor: cases)
     ai_message = AIMessage(
         content="",
         tool_calls=[{"name": "search_similar_tickets", "args": {"query": "NAS SMB shares"}, "id": "call_1"}],
     )
     state = {
         "customer_id": "C-1", "ticket_id": "T-1", "messages": [ai_message],
-        "retrieval_round": 1, "tool_calls_this_round": 0,
+        "ticket": TicketInput(subject="s", body="b"), "retrieval_round": 1, "tool_calls_this_round": 0,
     }
 
     result = tools_node(state)
@@ -52,3 +54,20 @@ def test_tools_node_records_failure_without_crashing():
     assert result["tool_log"][0].ok is False
     assert "error" in result["messages"][0].content
     assert result["retrieved_cases"] == []
+
+
+def test_similarities_to_dedupes_ids_before_hitting_chroma(monkeypatch):
+    """Regression (found in the CP5 live run): two `search_similar_tickets` calls in one turn
+    can return the same case, and Chroma's `get` raises DuplicateIDError on repeated IDs."""
+    import numpy as np
+
+    from autosupport.rag import dense
+
+    class _Coll:
+        def get(self, ids, include):
+            assert len(ids) == len(set(ids)), "duplicate IDs reached Chroma"
+            return {"ids": ids, "embeddings": [np.array([1.0, 0.0])] * len(ids)}
+
+    monkeypatch.setattr(dense, "_collection", lambda: _Coll())
+    sims = dense.similarities_to(["HF-1", "HF-2", "HF-1"], np.array([1.0, 0.0], dtype=np.float32))
+    assert set(sims) == {"HF-1", "HF-2"}

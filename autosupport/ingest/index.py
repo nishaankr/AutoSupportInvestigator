@@ -43,7 +43,8 @@ def _classify_all(records: pd.DataFrame) -> pd.DataFrame:
 
     residue = records.index[records["answer_class"] == "residue"]
     if len(residue):
-        llm = fast_llm().with_structured_output(classify.ResidueClassification)
+        # method="json_schema": decisions.md D13 (the default is unreliable for these models)
+        llm = fast_llm().with_structured_output(classify.ResidueClassification, method="json_schema")
         for idx in residue:
             result = classify.classify_residue(records.at[idx, "answer"], llm)
             records.at[idx, "answer_class"] = result.answer_class

@@ -169,7 +169,9 @@ match verification.recommended_action:
 #### `route_after_confirm` (source: `confirm_resolution`)
 ```text
 accepted                                      → "persist_case"
-rejected and revision_count < MAX_REVISIONS   → "investigate"   (feedback appended to messages)
+rejected and revision_count <= MAX_REVISIONS  → "investigate"   (feedback appended to messages)
+                       # `confirm_resolution` has already counted this rejection, so `<=` allows
+                       # exactly MAX_REVISIONS revised drafts; `<` would allow none (D15 F7)
 rejected otherwise                            → "escalate"
 ```
 
@@ -206,7 +208,9 @@ Every loop has a counter in state and a limit in config. When a limit is reached
 
 **Decision:** yes, `verify → investigate` is a second meaningful loop (D), separate from the retrieval loop (B). Loop B fixes *missing evidence*. Loop D fixes *claims that outran the evidence*. D can hand off to B when the verifier says the evidence itself is too thin.
 
-`tool_calls_this_round` is reset to 0 whenever a new round starts, i.e. when `refine_retrieval`, `ask_user` or `verify` routes back into `investigate`.
+`tool_calls_this_round` is reset to 0 whenever a new round starts: `refine_retrieval`, `ask_user`, `confirm_resolution` (on rejection) and `verify` each write 0 on their way back into `investigate`.
+
+**`recursion_limit` is 100, not 60 (D15 F2).** The worst single invocation is: 4 investigate rounds (the initial one, 2 refinements and 1 verify retry), each `investigate ⇄ tools` at one tool call per turn (6 × 2 = 12 supersteps) plus the conclusion and `assess_evidence` (2), plus `refine_retrieval`/`retrieve_variant` (2 per refinement) and the `resolve`/`escalate` → `verify` → `persist_case` tail — measured at **69 node executions** in `tests/test_graph_cp5.py::test_worst_case_fits_one_invocation_under_the_recursion_limit` (max_clarifications=0 so it all fits one `invoke`). 60 would have fired before the loop counters routed to `escalate`; 100 keeps it a pure backstop.
 
 ---
 
@@ -272,7 +276,7 @@ $ autosupport resume T-20260924-7f3a --accept
 |---|---|---|---|
 | After `intake` | Static fan-out / fan-in edges | `load_memory` ∥ `retrieve_initial` | They're independent I/O. `triage` needs both, and running them together cuts latency. |
 | `refine_retrieval` | `Send("retrieve_variant", payload)` × 2–3 | e.g. (a) the hypothesis rewritten as a query, (b) the original query filtered by queue, (c) a query filtered by tags or keywords taken from the clarification | Multi-query retrieval gives broader evidence in a single round. The `merge_cases` reducer deduplicates the results (`state-schema.md` §3). |
-| `tools` | `ToolNode` built-in | Several tool calls emitted in one AIMessage, e.g. `get_ticket_by_id` ×3 or `search_similar_tickets` + `compute_queue_stats` | This is free once tools are bound. |
+| `tools` | custom `tools` node | Several tool calls emitted in one AIMessage run **sequentially inside one node invocation** (D14, D15 F6) — not parallel graph branches, so no reducer is involved | The custom node also writes `tool_log` and merges search hits into `retrieved_cases`. |
 | After `persist_case` | Static fan-out | `index_case` ∥ `update_memory` | They're independent writes. |
 
 Every state key written by concurrent nodes has a reducer. Without one, LangGraph raises `InvalidUpdateError` when two branches write the same key in one superstep.

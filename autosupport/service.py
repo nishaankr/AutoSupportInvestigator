@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import secrets
 from datetime import datetime, timezone
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -69,15 +70,37 @@ def search(text: str, k: int = 10, queue: str | None = None) -> list[SearchHit]:
     ]
 
 
+class PendingInterrupt(BaseModel):
+    """What a paused ticket is waiting for — the `interrupt()` payload of `ask_user` or
+    `confirm_resolution` (graph-design.md §7), read back from the checkpoint."""
+
+    type: Literal["clarification", "confirmation"]
+    question: str | None = None
+    missing_slots: list[str] = []
+    resolution: str | None = None
+    confidence: dict | None = None
+    cited_case_ids: list[str] = []
+
+
 class TicketOutcome(BaseModel):
-    """The result of running (`new_ticket`) or looking up (`show`) a ticket. `result` is
-    `None` while the ticket is still in progress or awaiting a clarification — `show` never
-    invents a `CaseResult` for a case `persist_case` hasn't written yet."""
+    """The result of running (`new_ticket`, `resume_ticket`) or looking up (`show`) a ticket.
+    `result` is `None` until `persist_case` has written the `CaseResult`; `interrupt` is set
+    while the ticket is paused waiting on the customer."""
 
     ticket_id: str
     status: CaseStatus
     result: CaseResult | None
     pending_question: str | None
+    interrupt: PendingInterrupt | None = None
+
+
+class CaseListItem(BaseModel):
+    ticket_id: str
+    customer_id: str
+    status: CaseStatus
+    subject: str
+    pending_question: str | None
+    updated_at: str
 
 
 def _new_ticket_id() -> str:
@@ -86,8 +109,47 @@ def _new_ticket_id() -> str:
     return f"T-{datetime.now(timezone.utc):%Y%m%d}-{secrets.token_hex(3)}"
 
 
-def new_ticket(customer_id: str, subject: str, body: str) -> TicketOutcome:
+def _run_config(thread_id: str) -> dict:
+    """Run policy travels in `config["configurable"]` (graph-design.md §9), so a resume uses
+    exactly the limits the ticket started with."""
     from autosupport.config import settings
+
+    return {
+        "configurable": {
+            "thread_id": thread_id,
+            "max_tool_calls_per_round": settings.max_tool_calls_per_round,
+            "max_retrieval_rounds": settings.max_retrieval_rounds,
+            "max_clarifications": settings.max_clarifications,
+            "max_verify_retries": settings.max_verify_retries,
+            "max_revisions": settings.max_revisions,
+            "tau_rel": settings.tau_rel,
+            "require_acceptance": settings.require_acceptance,
+        },
+        "recursion_limit": settings.recursion_limit,
+    }
+
+
+def _outcome(ticket_id: str, thread_id: str) -> TicketOutcome:
+    """Built from the checkpoint, the one source that knows about a pause."""
+    from autosupport.graph.build import compiled_graph
+
+    snap = compiled_graph().get_state({"configurable": {"thread_id": thread_id}})
+    values = snap.values
+    pending = None
+    if snap.interrupts:
+        payload = snap.interrupts[0].value
+        pending = PendingInterrupt(
+            type=payload["type"], question=payload.get("question"),
+            missing_slots=payload.get("missing_slots", []), resolution=payload.get("resolution"),
+            confidence=payload.get("confidence"), cited_case_ids=payload.get("cited_case_ids", []),
+        )
+    return TicketOutcome(
+        ticket_id=ticket_id, status=values["status"], result=values.get("final_output"),
+        pending_question=values.get("pending_question"), interrupt=pending,
+    )
+
+
+def new_ticket(customer_id: str, subject: str, body: str) -> TicketOutcome:
     from autosupport.graph.build import compiled_graph
     from autosupport.graph.state import InputState, TicketInput
 
@@ -98,26 +160,51 @@ def new_ticket(customer_id: str, subject: str, body: str) -> TicketOutcome:
         "customer_id": customer_id,
         "ticket": TicketInput(subject=subject, body=body),
     }
-    config = {
-        "configurable": {
-            "thread_id": thread_id,
-            "max_tool_calls_per_round": settings.max_tool_calls_per_round,
-            "max_retrieval_rounds": settings.max_retrieval_rounds,
-            "max_clarifications": settings.max_clarifications,
-            "max_verify_retries": settings.max_verify_retries,
-            "max_revisions": settings.max_revisions,
-            "tau_rel": settings.tau_rel,
-        },
-        "recursion_limit": settings.recursion_limit,
-    }
-    output = compiled_graph().invoke(input_state, config)
+    compiled_graph().invoke(input_state, _run_config(thread_id))
+    return _outcome(ticket_id, thread_id)
 
-    return TicketOutcome(
-        ticket_id=output["ticket_id"],
-        status=output["status"],
-        result=output.get("final_output"),
-        pending_question=output.get("pending_question"),
-    )
+
+def resume_ticket(
+    ticket_id: str, answer: str | None = None, accept: bool = False, reject: str | None = None
+) -> TicketOutcome:
+    """Resumes a paused ticket from its checkpoint. Validated at this boundary: the ticket
+    must exist and be `awaiting_user`, and the flag given must match what it is waiting for
+    (an answer for a clarification; accept or reject for a confirmation)."""
+    from langgraph.types import Command
+
+    from autosupport.graph.build import compiled_graph
+    from autosupport.store import cases as cases_repo
+    from autosupport.store import db as store_db
+
+    conn = store_db.connect()
+    try:
+        row = cases_repo.get(conn, ticket_id)
+        if row is None:
+            raise ValueError(f"no such ticket: {ticket_id}")
+        if row["status"] != "awaiting_user":
+            raise ValueError(f"{ticket_id} is not waiting for input (status: {row['status']})")
+        thread_id = row["thread_id"]
+        pending = _outcome(ticket_id, thread_id).interrupt
+        if pending is None:
+            raise ValueError(f"{ticket_id} has no pending interrupt in its checkpoint")
+
+        if pending.type == "clarification":
+            if not answer:
+                raise ValueError(f"{ticket_id} is waiting for an answer: use --answer")
+            resume = {"answer": answer}
+        else:
+            if accept == (reject is not None):
+                raise ValueError(f"{ticket_id} is waiting for a decision: use exactly one of --accept / --reject")
+            resume = {"accepted": True} if accept else {"accepted": False, "feedback": reject}
+
+        # Flip the row back here, not inside the interrupt node — interrupt nodes have no
+        # side effects (graph-design.md §7.3).
+        cases_repo.set_status(conn, ticket_id, "investigating", pending_question=None)
+    finally:
+        conn.close()
+
+    compiled_graph().invoke(Command(resume=resume), _run_config(thread_id))
+    return _outcome(ticket_id, thread_id)
 
 
 def show(ticket_id: str) -> TicketOutcome:
@@ -133,6 +220,20 @@ def show(ticket_id: str) -> TicketOutcome:
         raise ValueError(f"no such ticket: {ticket_id}")
 
     result = CaseResult.model_validate_json(row["final_output"]) if row["final_output"] else None
+    interrupt = _outcome(ticket_id, row["thread_id"]).interrupt if row["status"] == "awaiting_user" else None
     return TicketOutcome(
-        ticket_id=row["ticket_id"], status=row["status"], result=result, pending_question=row["pending_question"]
+        ticket_id=row["ticket_id"], status=row["status"], result=result,
+        pending_question=row["pending_question"], interrupt=interrupt,
     )
+
+
+def list_cases(customer_id: str | None = None, awaiting: bool = False) -> list[CaseListItem]:
+    from autosupport.store import cases as cases_repo
+    from autosupport.store import db as store_db
+
+    conn = store_db.connect()
+    try:
+        rows = cases_repo.list_cases(conn, customer_id, awaiting)
+    finally:
+        conn.close()
+    return [CaseListItem(**{k: r[k] for k in r.keys()}) for r in rows]

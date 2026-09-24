@@ -6,6 +6,7 @@ directly. It must not import config or service at module level either, so that
 
 from __future__ import annotations
 
+import sys
 from typing import TYPE_CHECKING, Optional
 
 import typer
@@ -16,12 +17,33 @@ if TYPE_CHECKING:
 app = typer.Typer(name="autosupport", help="Autonomous Support Investigation Agent.", no_args_is_help=True)
 
 
+@app.callback()
+def _utf8_output() -> None:
+    """Model text routinely contains characters (arrows, dashes, curly quotes) that a Windows
+    console/redirect encoding (cp1252) can't encode, which crashed `--json > file` after the
+    graph had already finished. Output is always UTF-8."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
+def _render_interrupt(ticket_id: str, pending) -> None:
+    if pending.type == "clarification":
+        typer.echo(f'\n[PAUSED] {ticket_id} needs clarification: "{pending.question}"')
+        typer.echo(f'   autosupport resume {ticket_id} --answer "..."')
+        return
+    typer.echo(f"\n[PAUSED] {ticket_id} proposed resolution (confidence {pending.confidence['value']} "
+               f"{pending.confidence['band']}; cites {pending.cited_case_ids}):")
+    typer.echo(pending.resolution)
+    typer.echo(f'\n   autosupport resume {ticket_id} --accept   |   --reject "feedback"')
+
+
 def _render_outcome(outcome: "TicketOutcome") -> None:
     """Shared by `new` and `show` — both render the same `TicketOutcome` shape."""
     typer.echo(f"ticket_id: {outcome.ticket_id}")
     typer.echo(f"status:    {outcome.status}")
-    if outcome.pending_question:
-        typer.echo(f"pending question: {outcome.pending_question}")
+    if outcome.interrupt is not None:
+        _render_interrupt(outcome.ticket_id, outcome.interrupt)
     if outcome.result is None:
         typer.echo("(no result yet)")
         return
@@ -45,11 +67,13 @@ def _render_outcome(outcome: "TicketOutcome") -> None:
             f"reason: {result.escalation.reason}\nhandoff: {result.escalation.handoff_summary}"
         )
     typer.echo("")
-    if result.confidence is None:
-        typer.echo("confidence: not computed (verify not built yet — CP5)")
-    else:
-        typer.echo(f"confidence: {result.confidence.value} ({result.confidence.band})")
+    cf = result.confidence
+    typer.echo(f"confidence: {cf.value} ({cf.band})  support={cf.support} agreement={cf.agreement} "
+               f"relevance={cf.relevance} penalty={cf.penalty} cap={cf.cap_reason}")
+    typer.echo(f"verification: passed={result.verification.passed} attempts={result.verification.attempts}"
+               + (f" unresolved={result.verification.unresolved_issues}" if result.verification.unresolved_issues else ""))
     typer.echo(f"acceptance: {result.acceptance}")
+    typer.echo(f"stats: {result.stats.model_dump()}")
     if result.errors:
         typer.echo(f"errors: {result.errors}")
 
@@ -102,7 +126,17 @@ def resume(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
     """Resume a paused ticket: answer a clarification, or accept/reject a resolution."""
-    raise NotImplementedError
+    from autosupport import service
+
+    try:
+        outcome = service.resume_ticket(ticket_id, answer=answer, accept=accept, reject=reject)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        typer.echo(outcome.model_dump_json())
+        return
+    _render_outcome(outcome)
 
 
 @app.command()
@@ -131,7 +165,19 @@ def list_cases(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
     """List cases."""
-    raise NotImplementedError
+    from autosupport import service
+
+    items = service.list_cases(customer_id=customer, awaiting=awaiting)
+    if json_output:
+        typer.echo("[" + ", ".join(i.model_dump_json() for i in items) + "]")
+        return
+    if not items:
+        typer.echo("no cases")
+        return
+    for i in items:
+        typer.echo(f"{i.ticket_id}  {i.customer_id:<8} {i.status:<14} {i.subject[:50]}")
+        if i.pending_question:
+            typer.echo(f"    [PAUSED] {i.pending_question}")
 
 
 @app.command()

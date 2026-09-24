@@ -8,9 +8,11 @@ from pydantic import ValidationError
 from autosupport.graph.state import (
     CaseResult,
     Classification,
+    Confidence,
     EscalationBlock,
     RetrievedCase,
     RunStats,
+    VerificationOutcome,
     merge_cases,
 )
 
@@ -53,6 +55,8 @@ def _base_kwargs(**overrides):
         escalation=EscalationBlock(required=False),
         acceptance="not_required",
         stats=RunStats(retrieval_rounds=1, tool_calls=0, verify_attempts=0, revisions=0),
+        confidence=Confidence(value=0.5, support=0.5, agreement=1.0, relevance=0.5, penalty=0.0),
+        verification=VerificationOutcome(passed=True, attempts=1),
     )
     kwargs.update(overrides)
     return kwargs

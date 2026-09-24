@@ -1,10 +1,7 @@
-"""Conditional-edge functions (docs/design/graph-design.md §4.2). `route_after_investigate`
-lands at CP4; the rest (`route_after_assess`, `route_after_verify`, `route_after_confirm`)
-are CP5.
-
-CP4 deviation from graph-design.md's version, tracked in decisions.md: the full design
-routes a finished investigation to `assess_evidence`, which doesn't exist until CP5 — CP4
-routes straight to `resolve` instead. The tool-vs-stop decision itself is unchanged.
+"""Conditional-edge functions (docs/design/graph-design.md §4.2). Every loop these routers
+close has a counter in state and a limit in `config["configurable"]`, and every branch that
+can't make progress routes to `escalate` (or `persist_case` from an already-escalating run),
+so the graph always terminates (§6).
 """
 
 from __future__ import annotations
@@ -13,13 +10,53 @@ from typing import Literal
 
 from langchain_core.runnables import RunnableConfig
 
-from autosupport.config import settings
-from autosupport.graph.state import AgentState
+from autosupport.graph.runconfig import run_setting
+from autosupport.graph.state import AgentState, VerificationResult
 
 
-def route_after_investigate(state: AgentState, config: RunnableConfig) -> Literal["tools", "resolve"]:
+def route_after_investigate(state: AgentState, config: RunnableConfig) -> Literal["tools", "assess_evidence"]:
     last = state["messages"][-1]
-    budget = config.get("configurable", {}).get("max_tool_calls_per_round", settings.max_tool_calls_per_round)
+    budget = run_setting(config, "max_tool_calls_per_round")
     if getattr(last, "tool_calls", None) and state.get("tool_calls_this_round", 0) < budget:
         return "tools"
-    return "resolve"
+    return "assess_evidence"
+
+
+def route_after_assess(state: AgentState) -> Literal["resolve", "escalate", "refine_retrieval", "ask_user"]:
+    return state["evidence_assessment"].next_action
+
+
+def verify_destination(
+    *, verification: VerificationResult, decision: str, verify_attempts: int, retrieval_round: int,
+    max_verify_retries: int, max_retrieval_rounds: int, require_acceptance: bool,
+) -> Literal["confirm_resolution", "persist_case", "escalate", "investigate", "refine_retrieval"]:
+    """The single definition of where a finished `verify` goes. `verify` calls it too, to know
+    whether the next hop is `confirm_resolution` (and so must mark the case `awaiting_user`
+    itself), so the node and the router can never disagree."""
+    if verification.passed:
+        return "confirm_resolution" if decision == "resolve" and require_acceptance else "persist_case"
+    if verify_attempts >= max_verify_retries:
+        return "escalate" if decision == "resolve" else "persist_case"  # escalation persists, flagged
+    if verification.recommended_action == "re_retrieve" and retrieval_round < max_retrieval_rounds:
+        return "refine_retrieval"
+    return "investigate"  # re_reason, or re_retrieve with no retrieval rounds left
+
+
+def route_after_verify(state: AgentState, config: RunnableConfig):
+    return verify_destination(
+        verification=state["verification"], decision=state["decision"],
+        verify_attempts=state["verify_attempts"], retrieval_round=state["retrieval_round"],
+        max_verify_retries=run_setting(config, "max_verify_retries"),
+        max_retrieval_rounds=run_setting(config, "max_retrieval_rounds"),
+        require_acceptance=run_setting(config, "require_acceptance"),
+    )
+
+
+def route_after_confirm(state: AgentState, config: RunnableConfig) -> Literal["persist_case", "investigate", "escalate"]:
+    if state["user_acceptance"] == "accepted":
+        return "persist_case"
+    # `confirm_resolution` has already counted this rejection, so `<=` allows exactly
+    # `max_revisions` revised drafts (D15 F7: graph-design.md's `<` would allow none).
+    if state["revision_count"] <= run_setting(config, "max_revisions"):
+        return "investigate"
+    return "escalate"

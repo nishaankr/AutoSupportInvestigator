@@ -69,6 +69,40 @@ def _lookup(conn: sqlite3.Connection, case_id: str) -> tuple[str, str, str | Non
     return row["subject"], source, answer_class, 1
 
 
+def evidence_context(evidence: list[EvidenceEntry], retrieved: list[RetrievedCase], conn: sqlite3.Connection) -> str:
+    """The historical text behind each evidence entry, for drafting (`resolve`, `escalate`)
+    and checking (`verify`). An `EvidenceEntry` carries `subject` but not the answer itself,
+    so it's read from `retrieved_cases`, or straight from SQLite for evidence sourced
+    elsewhere (e.g. customer history)."""
+    if not evidence:
+        return "(no evidence gathered)"
+    by_id = {c.case_id: c for c in retrieved}
+    blocks = []
+    for e in evidence:
+        rc = by_id.get(e.case_id)
+        problem, answer = (rc.body_snippet, rc.answer_snippet) if rc else _fallback_text(conn, e.case_id)
+        blocks.append(
+            f"[{e.case_id}] stance={e.stance} answer_class={e.answer_class} cluster_size={e.cluster_size}\n"
+            f"investigator's note: {e.summary}\nproblem: {problem}\nhistorical answer: {answer}"
+        )
+    return "\n\n".join(blocks)
+
+
+def _fallback_text(conn: sqlite3.Connection, case_id: str) -> tuple[str, str]:
+    if case_id.startswith("HF-"):
+        row = conn.execute("SELECT body_ix, answer_ix FROM dataset_tickets WHERE case_id = ?", (case_id,)).fetchone()
+        return (row["body_ix"], row["answer_ix"]) if row else ("(unavailable)", "(unavailable)")
+    row = conn.execute("SELECT body, final_output FROM cases WHERE ticket_id = ?", (case_id,)).fetchone()
+    if row is None:
+        return "(unavailable)", "(unavailable)"
+    answer = "(no resolution on file — this case is open or was escalated)"
+    if row["final_output"]:
+        from autosupport.graph.state import CaseResult
+
+        answer = CaseResult.model_validate_json(row["final_output"]).resolution
+    return row["body"], answer
+
+
 def _order(entries: list[EvidenceEntry]) -> list[EvidenceEntry]:
     return sorted(
         entries,

@@ -41,3 +41,16 @@ def test_heuristic_precision_per_class():
             f"{cls} precision {precision:.3f} (n={len(predicted_as_cls)}) fell below the "
             f"floor {floor} — re-run the validation and check for a real regression"
         )
+
+
+def test_classify_residue_never_sends_an_empty_message_to_the_llm():
+    """Regression: a full ingest crashed with a 400 ('user messages must have non-empty
+    content') on a row whose answer was empty after normalisation."""
+    from autosupport.ingest.classify import classify_residue
+
+    class _Boom:
+        def invoke(self, _messages):
+            raise AssertionError("LLM called for an empty answer")
+
+    for empty in ("", "   ", "<name> <tel_num>"):
+        assert classify_residue(empty, _Boom()).answer_class == "escalation"
