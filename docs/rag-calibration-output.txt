@@ -1,0 +1,50 @@
+# RAG calibration output (scripts/rag_calibration.py)
+## 1. Corpus
+English rows: 28261
+Exact-duplicate groups on index-text (subject|body|answer): 4460; group sizes: {2: 4460}
+Version combos (-1 = None): {(-1, 400): 4460}
+Distinct records: 23801  (dropped 4460)
+Distinct records without a subject: 2843
+Below the 30-char minimum-content guard: 8
+
+## 2. answer_class heuristic
+All distinct: {'clarification_request': 0.477, 'escalation': 0.328, 'resolution': 0.116, 'residue': 0.078}
+Counts: {'clarification_request': 11364, 'escalation': 7816, 'resolution': 2753, 'residue': 1868}
+Test pool (md5 % 10 == 0): 2389 records; dev: 21412
+Test-pool class counts: {'clarification_request': 1111, 'escalation': 767, 'resolution': 307, 'residue': 204}
+
+## 3. Similarity baselines
+Random-pair cosine, embed text: p50=0.585 p90=0.719 p95=0.764 p99=0.839 p99.9=0.905
+Random-pair cosine, answers:    p50=0.628 p90=0.746 p95=0.777 p99=0.837 p99.9=0.895
+cos(subject+body, body-only), same ticket: p10=0.928 p50=0.967 p90=0.984
+
+## 4. Problem-similarity band vs answer / entity agreement (top-3 neighbours, sim >= 0.86)
+                  n  answer_sim_median  answer_sim_below_080  answer_sim_below_085  entity_conflict
+band                                                                                               
+(0.86, 0.88]    385              0.814                 0.444                 0.732            0.052
+(0.88, 0.9]     533              0.830                 0.356                 0.617            0.011
+(0.9, 0.92]     745              0.841                 0.330                 0.556            0.004
+(0.92, 0.94]    922              0.865                 0.273                 0.439            0.004
+(0.94, 0.96]    970              0.930                 0.116                 0.232            0.002
+(0.96, 0.98]   1089              0.978                 0.035                 0.054            0.001
+(0.98, 1.001]  1356              0.986                 0.001                 0.002            0.000
+
+## 5. Star clustering sweep
+T=0.90 unguarded: canonicals=7691 collapsed=67.7% max=51 sizes={'1': 3051, '2-3': 3206, '4-7': 963, '8-15': 270, '16+': 201} minpair_p5=0.820
+T=0.90 guarded:   canonicals=11144 collapsed=53.2% max=39 sizes={'1': 5343, '2-3': 4496, '4-7': 1048, '8-15': 211, '16+': 46} minpair_p5=0.844
+T=0.92 unguarded: canonicals=9532 collapsed=60.0% max=51 sizes={'1': 4095, '2-3': 4040, '4-7': 1084, '8-15': 198, '16+': 115} minpair_p5=0.859
+T=0.92 guarded:   canonicals=12270 collapsed=48.4% max=39 sizes={'1': 6238, '2-3': 4914, '4-7': 982, '8-15': 107, '16+': 29} minpair_p5=0.876
+T=0.94 unguarded: canonicals=11733 collapsed=50.7% max=51 sizes={'1': 5715, '2-3': 4832, '4-7': 1044, '8-15': 107, '16+': 35} minpair_p5=0.900
+T=0.94 guarded:   canonicals=13648 collapsed=42.7% max=28 sizes={'1': 7634, '2-3': 5111, '4-7': 850, '8-15': 44, '16+': 9} minpair_p5=0.912
+T=0.96 unguarded: canonicals=14229 collapsed=40.2% max=34 sizes={'1': 8437, '2-3': 4972, '4-7': 796, '8-15': 17, '16+': 7} minpair_p5=0.938
+T=0.96 guarded:   canonicals=15462 collapsed=35.0% max=15 sizes={'1': 10025, '2-3': 4820, '4-7': 608, '8-15': 9, '16+': 0} minpair_p5=0.943
+T=0.92 guarded T_a=0.80: canonicals=11880 collapsed=50.1% max=41 sizes={'1': 6027, '2-3': 4665, '4-7': 1014, '8-15': 132, '16+': 42} minpair_p5=0.870
+T=0.92 guarded T_a=0.90: canonicals=13088 collapsed=45.0% max=35 sizes={'1': 6787, '2-3': 5343, '4-7': 895, '8-15': 55, '16+': 8} minpair_p5=0.892
+
+## 6. Retrieval (index = 12262 canonicals at T=0.92, T_a=0.85, guarded)
+Canonical answer classes: {'clarification_request': 0.454, 'escalation': 0.334, 'resolution': 0.114, 'residue': 0.098}
+Q1 member->canonical recall@10: {'dense': 0.983, 'bm25_flat': 0.797, 'bm25_weighted_2_1_.5_1.5': 0.797, 'bm25_answer_weight_0': 0.807, 'rrf_k5': 0.975, 'rrf_k10': 0.973, 'mmr_lambda0.5': 0.96, 'mmr_lambda0.7': 0.963, 'mmr_lambda0.85': 0.968, 'rrf_k20': 0.963, 'rrf_k60': 0.94, 'rrf_k10_depth25': 0.98, 'rrf_k10_depth100': 0.97}
+Q2 entity@10 (and MMR diagnostics): {'dense': 0.176, 'bm25_flat': 0.375, 'bm25_weighted_2_1_.5_1.5': 0.37, 'bm25_answer_weight_0': 0.359, 'rrf_k5': 0.315, 'rrf_k10': 0.315, 'pairsim_no_mmr': 0.733, 'mmr_lambda0.5': 0.325, 'pairsim_mmr0.5': 0.703, 'swapped_mmr0.5': 1.385, 'mmr_lambda0.7': 0.321, 'pairsim_mmr0.7': 0.72, 'swapped_mmr0.7': 0.625, 'mmr_lambda0.85': 0.321, 'pairsim_mmr0.85': 0.726, 'swapped_mmr0.85': 0.312, 'rrf_k20': 0.307, 'rrf_k60': 0.299, 'rrf_k10_depth25': 0.315, 'rrf_k10_depth100': 0.314}
+Q2 arm overlap |dense50 & bm25_50|: p25=3 p50=7 p75=12
+Q2 lexical-only entity hit survives fused top-10 (rate, n): {5: (0.672, 180), 10: (0.65, 180), 20: (0.589, 180), 60: (0.528, 180)}
+3rd-best dense similarity per query: p10=0.774 p25=0.804 p50=0.832; share >= tau_rel 0.76: 0.932

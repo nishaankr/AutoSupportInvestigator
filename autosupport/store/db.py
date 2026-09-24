@@ -1,0 +1,64 @@
+"""SQLite connection + schema for `data/autosupport.sqlite` (architecture.md §2.2).
+
+Plain `sqlite3`, no ORM — three tables don't need one (CLAUDE.md dependency policy). This
+module owns schema creation; `cases` and `customers` are added when CP3/CP6 need them —
+until then this only creates `dataset_tickets` and its FTS5 index.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+
+from autosupport.config import settings
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS dataset_tickets (
+    case_id TEXT PRIMARY KEY,
+    source TEXT NOT NULL DEFAULT 'dataset',
+    hf_row INTEGER NOT NULL,
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    subject_ix TEXT NOT NULL,
+    body_ix TEXT NOT NULL,
+    answer_ix TEXT NOT NULL,
+    title TEXT NOT NULL,
+    title_is_derived INTEGER NOT NULL,
+    queue TEXT NOT NULL,
+    type TEXT NOT NULL,
+    priority TEXT NOT NULL,
+    language TEXT NOT NULL,
+    version INTEGER,
+    tag_1 TEXT, tag_2 TEXT, tag_3 TEXT, tag_4 TEXT,
+    tag_5 TEXT, tag_6 TEXT, tag_7 TEXT, tag_8 TEXT,
+    answer_class TEXT NOT NULL,
+    answer_class_source TEXT NOT NULL,
+    below_content_threshold INTEGER NOT NULL DEFAULT 0,
+    is_canonical INTEGER NOT NULL DEFAULT 0,
+    canonical_of TEXT REFERENCES dataset_tickets(case_id),
+    cluster_size INTEGER,
+    indexed_at TEXT,
+    ingested_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dataset_tickets_canonical_of ON dataset_tickets(canonical_of);
+CREATE INDEX IF NOT EXISTS idx_dataset_tickets_is_canonical ON dataset_tickets(is_canonical);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS dataset_tickets_fts USING fts5(
+    subject, body, answer, tags,
+    case_id UNINDEXED, source UNINDEXED, queue UNINDEXED, type UNINDEXED, answer_class UNINDEXED,
+    tokenize = 'unicode61 remove_diacritics 2'
+);
+"""
+
+
+def connect(rebuild: bool = False) -> sqlite3.Connection:
+    """Opens (creating if needed) `data/autosupport.sqlite` with the schema applied.
+    `rebuild=True` drops `dataset_tickets` and its FTS5 index first — used by
+    `autosupport ingest --rebuild`."""
+    settings.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(settings.sqlite_path)
+    conn.row_factory = sqlite3.Row
+    if rebuild:
+        conn.executescript("DROP TABLE IF EXISTS dataset_tickets; DROP TABLE IF EXISTS dataset_tickets_fts;")
+    conn.executescript(_SCHEMA)
+    return conn

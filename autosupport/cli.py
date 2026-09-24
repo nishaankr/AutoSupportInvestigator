@@ -20,7 +20,19 @@ def ingest(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
     """Download the HF dataset, filter to English, load, embed and index it."""
-    raise NotImplementedError
+    from autosupport import service
+
+    result = service.ingest(limit=limit, rebuild=rebuild)
+    if json_output:
+        typer.echo(result.model_dump_json())
+        return
+    typer.echo(f"rows loaded:              {result.rows_loaded}")
+    typer.echo(f"below content threshold:  {result.rows_below_content_threshold}")
+    typer.echo(f"canonicals indexed:       {result.canonicals_indexed}")
+    typer.echo(f"answer_class:             {result.answer_class_distribution}")
+    typer.echo(f"answer_class source:      {result.answer_class_source_distribution}")
+    typer.echo(f"cluster size:             {result.cluster_size_distribution}")
+    typer.echo(f"duration:                 {result.duration_seconds:.1f}s")
 
 
 @app.command()
