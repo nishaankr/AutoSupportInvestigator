@@ -106,7 +106,7 @@ If any of these fails, `verification.passed = false` and the failure is listed a
 **Confidence measures how strongly the historical evidence supports this result's analysis.** The meaning is the same for both outcomes. It is not the probability that the customer's issue is fixed, it is not the LangSmith quality score, and it is not the model's opinion of itself.
 
 For escalations, this makes the number useful to the human who picks up the handoff:
-- A rule-triggered escalation over a well-supported diagnosis can score **high**. What's wrong is clear; policy says a human must act.
+- A rule-triggered escalation over a well-supported diagnosis can score **high** — provided the supporting evidence is itself `resolution`-class (§4.3 substantive is resolution-only, `rag-design.md` §5 Decision 3). "These cases also got escalated" is not a diagnosis and carries no weight; "these cases were all root-caused to the same misconfiguration, and policy requires a human to apply the fix" is, and does.
 - An escalation because budgets ran out scores **low**. Nobody knows what's wrong yet.
 
 ### 4.2 Scale and bands
@@ -122,7 +122,7 @@ For escalations, this makes the number useful to the human who picks up the hand
 
 ### 4.3 Inputs
 - The enriched `evidence` list (§3), plus `evidence_assessment.verdict`, `evidence_assessment.missing_slots` and whether verification passed. τ_rel comes from config.
-- **Substantive** means `answer_class ∈ {resolution, escalation}`. A `clarification_request` case shows that someone asked a question, not what fixed the problem. An open customer case (`answer_class = None`) has no answer yet. Neither kind adds support or contradiction.
+- **Substantive** means `answer_class == resolution` — resolution-only, not `{resolution, escalation}` as an earlier draft had it. `rag-design.md` §5 (Decision 3) folded handoff answers ("we'll investigate and call you") into `escalation`, and a handoff carries no grounded fix — counting it as support would let "the historical neighbourhood mostly got handed off" read as evidence *for* a resolution, which is backwards. A `clarification_request` case shows someone asked a question, not what fixed the problem, and an open customer case (`answer_class = None`) has no answer yet. None of the three non-resolution kinds add support or contradiction weight.
 - **Cluster weight** is `w = min(1 + log2(cluster_size), 5)`. A singleton weighs 1, a pair 2, a cluster of 4 weighs 3, a cluster of 8 weighs 4, and 16 or more weighs 5.
   - The weight grows sublinearly because the corpus is synthetic and templated. A cluster of 12 is stronger evidence than one case, but it isn't 12 independent confirmations (D3).
   - The cap stops a single large template cluster from carrying the score alone.
@@ -154,10 +154,10 @@ value     = round(clamp(min(base − penalty, cap), 0, 1), 2)
 - **Caps tie the number to the verdict.** An insufficient verdict can never read as medium, a conflicting one can never read as high, and a failed verification can never rise above low.
 - **The missing-slot penalty** covers facts the approach depends on that nobody supplied.
 
-**Constants.** These live as module constants in `autosupport/graph/confidence.py`: `K = 2.5`, `W_MAX = 5`, `SIM_CEILING = 0.85`, the two factor floors, the penalty step and ceiling, the four caps, and the band edges.
+**Constants.** These live as module constants in `autosupport/graph/confidence.py`: `K = 2.5`, `W_MAX = 5`, `SIM_CEILING = 0.92`, the two factor floors, the penalty step and ceiling, the four caps, and the band edges.
 - They aren't in config because they define the scale. Changing one changes the meaning of every stored value, so a change should go through code review, not an environment variable.
 - τ_rel does come from config, because `assess_evidence` shares it.
-- `SIM_CEILING = 0.85` is a starting default. It gets calibrated at CP2 alongside τ_rel, against the real `bge-small` similarity distribution (`graph-design.md` §5).
+- `SIM_CEILING = 0.92`, measured, not a starting guess: it equals the clustering threshold T (`rag-design.md` §4/§9), so a retrieved case at or above it is — by the same standard used to canonicalise the corpus — a near-duplicate of the ticket. `τ_rel = 0.76` is the measured random-pair p95 (`rag-design.md` §9); the two together define a 0.16-wide relevance band, both anchored to the real `bge-small` similarity distribution rather than assumed.
 
 ### 4.5 Where it is computed
 Confidence is computed **only in `verify`**, once per verification attempt:
@@ -170,15 +170,19 @@ Every path to `confirm_resolution` and `persist_case` passes through `verify`, s
 ### 4.6 `Confidence` model
 `value` and `band` (computed), plus the components that produced them: `support`, `agreement`, `relevance` (each rounded to 3 dp), `penalty`, and `cap_reason ∈ {no_substantive_support, insufficient, conflicting, verification_failed} | None`. The components are persisted so that `show` and the evals can explain any score.
 
-### 4.7 Worked examples (τ_rel = 0.55, SIM_CEILING = 0.85)
+### 4.7 Worked examples (τ_rel = 0.76, SIM_CEILING = 0.92 — `rag-design.md` §9; substantive = resolution-only, §4.3)
 
-| # | Scenario | Supporting cluster sizes | Contradicting | Top similarities | Other | support | agreement factor | relevance factor | **value** | band |
+Similarities below are realistic for this corpus, not illustrative round numbers: measured 3rd-best dense similarity to an actual canonical has p10 = 0.770, p50 = 0.829 (`rag-design.md` §9), so "supporting" similarities in the high-0.7s to high-0.8s are the typical case, not an edge case.
+
+| # | Scenario | Supporting cluster sizes (resolution-class) | Contradicting | Top similarities | Other | support | agreement factor | relevance factor | **value** | band |
 |---|---|---|---|---|---|---|---|---|---|---|
-| A | Strong resolve | 8, 3, 1 | — | .78 .74 .70 | — | 0.952 | 1.000 | 0.890 | **0.85** | high |
-| B | Contested resolve | 15, 1 | 3 | .72 .66 | — | 0.906 | 0.817 | 0.840 | **0.62** | medium |
-| C | Thin resolve | 1, 1, 1 | — | .65 .62 .60 | — | 0.699 | 1.000 | 0.773 | **0.54** | medium |
-| D | Rule-hit escalation (critical security) | 4, 2, 1 | — | .75 .70 .68 | — | 0.909 | 1.000 | 0.860 | **0.78** | high |
-| E | Escalation, budgets spent | 1 | — | .60 | 2 missing slots, verdict insufficient | 0.330 | 1.000 | 0.750 | **0.05** | low |
+| A | Strong resolve | 8, 3, 1 | — | .91 .87 .83 | — | 0.952 | 1.000 | 0.906 | **0.86** | high |
+| B | Contested resolve | 15, 1 | 3 | .85 .80 | — | 0.906 | 0.817 | 0.822 | **0.60** | medium (capped: conflicting) |
+| C | Thin resolve | 1, 1, 1 | — | .80 .78 .77 | — | 0.699 | 1.000 | 0.744 | **0.52** | medium |
+| D | Rule-hit escalation, well-diagnosed | 4, 2, 1 | — | .88 .84 .81 | — | 0.909 | 1.000 | 0.856 | **0.78** | high |
+| E | Escalation, budgets spent | *(evidence is escalation-class only — not substantive)* | — | .77 | 2 missing slots, verdict insufficient | 0.000 | 0.400 | 0.719 | **0.00** | low (capped: no_substantive_support) |
+
+**Example E is the sharpest illustration of resolution-only substantive**: even though a case was retrieved at reasonable similarity (.77, just above τ_rel), it's `escalation`-class — "this also got escalated" is not a diagnosis — so `W_s = 0` and the score floors at exactly 0.00, not a small positive number. An earlier draft of this table (before Decision 3) let escalation-class evidence count as substantive and scored this same shape of scenario at 0.05; the corrected version is a better fit for §4.1's stated meaning: this escalation genuinely has *no* grounded diagnosis behind it, and the number should say so plainly.
 
 ### 4.8 Calibration hook
 `evaluation-design.md` (CP7) buckets runs by band and compares the buckets against the groundedness evaluator. High-band results should score higher than medium, and medium higher than low. If they don't, the constants are wrong: change them here and record why.
@@ -309,20 +313,20 @@ def compute_confidence(
   "evidence": [
     {"case_id": "HF-10432", "summary": "QNAP shares unreachable after firmware update → re-enabled SMB2",
      "stance": "supports", "source": "dataset", "subject": "NAS shares not visible after update",
-     "answer_class": "resolution", "cluster_size": 8, "similarity": 0.78, "approach": "re-enable SMB2"},
+     "answer_class": "resolution", "cluster_size": 8, "similarity": 0.91, "approach": "re-enable SMB2"},
     {"case_id": "HF-877", "summary": "SMB clients dropped after NAS update → protocol range reset",
      "stance": "supports", "source": "dataset", "subject": "…",
-     "answer_class": "resolution", "cluster_size": 3, "similarity": 0.74, "approach": "re-enable SMB2"},
+     "answer_class": "resolution", "cluster_size": 3, "similarity": 0.87, "approach": "re-enable SMB2"},
     {"case_id": "T-20260911-a41c09", "summary": "Same customer, same NAS → fixed by SMB2 re-enable",
      "stance": "supports", "source": "agent_resolved", "subject": "…",
-     "answer_class": "resolution", "cluster_size": 1, "similarity": 0.70, "approach": "re-enable SMB2"}
+     "answer_class": "resolution", "cluster_size": 1, "similarity": 0.83, "approach": "re-enable SMB2"}
   ],
   "analysis": "The firmware update resets the minimum SMB version; eleven historical cases [HF-10432][HF-877] and this customer's own earlier ticket [T-20260911-a41c09] were resolved by re-enabling SMB2.",
   "resolution": "1. Open Control Panel → Network & File Services → Win/Mac/NFS [HF-10432]. 2. …",
   "escalation": {"required": false, "trigger": null, "rule": null,
                  "target_queue": null, "reason": null, "handoff_summary": null},
-  "confidence": {"value": 0.85, "band": "high", "support": 0.952, "agreement": 1.0,
-                 "relevance": 0.633, "penalty": 0.0, "cap_reason": null},
+  "confidence": {"value": 0.86, "band": "high", "support": 0.952, "agreement": 1.0,
+                 "relevance": 0.687, "penalty": 0.0, "cap_reason": null},
   "verification": {"passed": true, "attempts": 1, "unresolved_issues": []},
   "acceptance": "accepted",
   "clarifications": [],
@@ -331,11 +335,11 @@ def compute_confidence(
 }
 ```
 
-An escalated result has the same shape. Worked example E, for instance, has `"status": "escalated"`, `"escalation": {"required": true, "trigger": "evidence_exhausted", …}`, `"confidence": {"value": 0.05, "band": "low", "cap_reason": "insufficient", …}` and `"acceptance": "not_required"`.
+An escalated result has the same shape. Worked example E, for instance, has `"status": "escalated"`, `"escalation": {"required": true, "trigger": "evidence_exhausted", …}`, `"confidence": {"value": 0.00, "band": "low", "cap_reason": "no_substantive_support", …}` and `"acceptance": "not_required"`.
 
 ---
 
-## 9. Open (resolved at CP2 in `rag-design.md`)
-- Calibrate `SIM_CEILING` alongside τ_rel.
-- Decide how `similarity` is filled for results found only by the lexical arm. Until that's decided, it's `None`, which only lowers `relevance`.
-- `merge_cases` keeps the maximum fused `score` across queries, but RRF scores from different queries aren't strictly comparable. Confirm this is acceptable or switch the merge key.
+## 9. Open — all resolved in `rag-design.md`'s full rewrite
+- ~~Calibrate `SIM_CEILING` alongside τ_rel.~~ → `τ_rel = 0.76` (measured random-pair p95), `SIM_CEILING = 0.92` (equal to the clustering threshold T) — `rag-design.md` §9.
+- ~~Decide how `similarity` is filled for results found only by the lexical arm.~~ → filled for **every** fused candidate, dense-only or lexical-only, as cosine(ticket embedding, candidate embedding fetched from Chroma) — never `None` (`rag-design.md` §7). `RetrievedCase.similarity` (`state-schema.md`) is a required field, not optional.
+- ~~`merge_cases` keeps the maximum fused `score` across queries...~~ → switched: `merge_cases` now keys on `similarity`, which is on one fixed scale regardless of which query found the case; `score` (the fused RRF value) stays ranking-only within a single query's own results (`state-schema.md`, `rag-design.md` §11).

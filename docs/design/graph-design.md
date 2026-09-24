@@ -177,11 +177,11 @@ rejected otherwise                            → "escalate"
 
 ## 5. What counts as "enough" and "conflicting" evidence
 
-`assess_evidence` uses these operational definitions. Similarity thresholds are **starting defaults** that will be calibrated against a held-out slice of the dataset after ingestion (see `rag-design.md`).
+`assess_evidence` uses these operational definitions. `τ_rel` is calibrated against the real dataset's measured random-pair similarity distribution — full derivation in `rag-design.md` §9.
 
 | Term | Definition |
 |---|---|
-| **Relevant case** | A retrieved case with cosine similarity ≥ `τ_rel` (default 0.55) to the current query. |
+| **Relevant case** | A retrieved case with cosine similarity ≥ `τ_rel` (default 0.76 — the measured random-pair p95, `rag-design.md` §9) to the current query. |
 | **Approach cluster** | The cheap model groups the historical *answers* of the relevant cases into distinct resolution approaches. Example: "reset credentials", "clear cache + reinstall", "billing adjustment". Each cluster records its `case_ids`. |
 | **Dominant share** | The size of the largest cluster divided by the number of relevant cases. |
 | **Sufficient** | ≥ 3 relevant cases **and** a dominant share ≥ 0.6 **and** a hypothesis supported by ≥ 2 cases in the dominant cluster **and** no `missing_slots` that would change the approach. |
@@ -289,7 +289,7 @@ Every state key written by concurrent nodes has a reducer. Without one, LangGrap
 | `max_clarifications` | 2 | `assess_evidence` |
 | `max_verify_retries` | 2 | `route_after_verify` |
 | `max_revisions` | 1 | `route_after_confirm` |
-| `tau_rel` | 0.55 | `assess_evidence` |
+| `tau_rel` | 0.76 | `assess_evidence` |
 | `require_acceptance` | `true` | `route_after_verify`. When `false`, a passed resolution skips `confirm_resolution`, which is useful for batch LangSmith eval runs. |
 | `recursion_limit` | 60 | LangGraph |
 

@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     max_clarifications: int = 2
     max_verify_retries: int = 2
     max_revisions: int = 1
-    tau_rel: float = 0.55
+    tau_rel: float = 0.76  # measured random-pair p95 (rag-design.md §9), not a guess
     require_acceptance: bool = True
     recursion_limit: int = 60
 

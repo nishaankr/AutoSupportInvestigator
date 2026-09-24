@@ -57,9 +57,25 @@ stronger grounding claim than one case. It feeds the confidence score, and it gi
 detection a weight dimension — clusters of 15 vs 3 disagreeing is a different situation from
 15 vs 14.
 
-**Rejected:** exact-hash dedup alone (misses templated variation); MinHash/LSH (viable, but
-embedding-threshold clustering reuses machinery already present); retrieval-time MMR *alone*
-(treats the symptom, discards the signal). MMR is still used, on top of this.
+**Method, as measured (`rag-design.md` §4):** star (leader) clustering over a k-NN graph, not
+connected components — a full-corpus measurement found connected components collapses the
+corpus into a handful of giant clusters (74.6% of records in one component at the chosen
+threshold), because a similarity graph chains transitively through intermediate near-matches.
+Star clustering requires every member to be similar *to the canonical itself*, which doesn't
+chain. A candidate only joins when, beyond cosine similarity ≥ T = 0.92, a **guard** also
+holds: matching `answer_class`, answer-text similarity ≥ 0.85, and no conflicting named
+entity. The guard exists because measurement found near-duplicate *problems* routinely get
+different *answers* (30% of pairs at similarity 0.90–0.92 have answer-similarity < 0.80) —
+without it, `cluster_size` would certify agreement that never happened, exactly the failure
+this decision exists to prevent, just relocated from exact- to near-duplicate detection.
+Full thresholds, the sweep that produced them, and the argued-and-resolved case against T=0.92
+are in `rag-design.md` §4.
+
+**Rejected:** exact-hash dedup alone (misses templated variation — used only for the small
+set of *true* exact duplicates, a dataset-generation merge artifact, not the general case);
+MinHash/LSH (viable, but embedding-threshold clustering reuses machinery already present);
+retrieval-time MMR *alone* (treats the symptom, discards the signal). MMR is still used, on
+top of this.
 
 ---
 
@@ -68,11 +84,18 @@ embedding-threshold clustering reuses machinery already present); retrieval-time
 Chroma supplies the dense arm; a SQLite FTS5 virtual table supplies BM25. Results are fused
 with Reciprocal Rank Fusion, then diversified with MMR. RRF and MMR are written in-repo.
 
-**Why:** every ticket in this corpus shares the same generated scaffolding ("Dear Customer
-Support Team, I hope this message reaches you well"). That boilerplate dominates the
-embedding and flattens dense similarity across unrelated tickets. The actual discriminating
-signal is entities — `QNAP NAS`, `Aruba 2530`, `macOS 15`, `Crucial MX500`, `Kubernetes` —
-which lexical search captures precisely and embeddings blur.
+**Why, corrected after measurement:** an earlier draft of this decision attributed the
+flattened dense similarity to greeting boilerplate ("Dear Customer Support Team, I hope this
+message reaches you well"). Measured: only 17.9% of bodies actually open with a greeting —
+concentrated almost entirely in one small dataset-version slice (92% of `version=51`'s 551
+rows, 10–22% elsewhere) — and stripping greetings barely moves the random-pair similarity
+distribution. **The real cause is corpus-wide style homogeneity**: every ticket is synthetic,
+single-domain (IT/software support) and generated in the same narrow register, which flattens
+embeddings independent of any specific boilerplate phrase. The conclusion is unchanged: the
+discriminating signal is entities — `QNAP NAS`, `Aruba 2530`, `macOS 15`, `Crucial MX500`,
+`Kubernetes` — which lexical search captures precisely and embeddings blur. Measured on the
+full corpus (`rag-design.md` §7): dense-only entity@10 is 0.202 against BM25's 0.394, and a
+lexical-only entity hit survives RRF fusion into the top 10 at 59% (k=10).
 
 **Why FTS5 specifically:** it ships inside SQLite, so the lexical arm costs no new
 dependency and no new store, and it indexes the same rows the tools already query.
@@ -86,30 +109,58 @@ persistence).
 ## D5 — `answer_class` assigned at ingest, by heuristics with a validated sample
 
 Every historical answer is typed `resolution`, `clarification_request` or `escalation`.
-Method: regex/heuristic first pass; precision measured against a hand-labelled random sample
-of 200; an LLM applied only to the ambiguous residue.
+Method: a **sentence-level** regex/heuristic first pass (not whole-answer pattern matching —
+an answer routinely mixes a real fix with an unrelated trailing sentence, and sentence-level
+scoring lets the strongest signal win instead of the two cancelling out); precision measured
+against a hand-labelled sample of 200, stratified by predicted class from a held-out test
+pool; a fast-tier LLM applied only to the ~8–10% residue the heuristic can't confidently
+call. Handoff answers ("we'll investigate and call you") are classed as `escalation`, not a
+fourth category — matching `graph-design.md`'s escalation rule, which already reads
+"resolved by escalation *or handoff*."
 
 **Why the field exists:** a large share of the dataset's `answer` values are not resolutions
 at all — they are requests for more information ("please specify the model and firmware
 version"). Grounding a resolution on five retrieved cases that all say "send us your logs"
 produces confident nonsense. Conversely, a retrieved neighbourhood dominated by
 `clarification_request` is the strongest available signal that *this* ticket needs the
-clarification route — it tells the agent what to ask and that asking is correct.
+clarification route — it tells the agent what to ask and that asking is correct. Measured:
+only ~7–12% of historical answers are genuine resolutions (`rag-design.md` §5.3), so
+grounding is scarce by construction, and the `resolution_only` second-pass retrieval variant
+(`rag-design.md` §10) exists specifically to compensate.
 
 **Why this method:** running a model over 28K rows is slow and expensive for a labelling
 task that patterns handle well. The sampled precision figure is reported in the README as
 measured methodology rather than an unverified claim — which is itself worth more than a
-marginally better classifier.
+marginally better classifier. **Labelled by Claude, in this session — not a human hand-label**
+— disclosed as such rather than implied otherwise, since D5's whole point is that the
+precision figure is honest methodology.
 
-**Rejected:** LLM over the full corpus; heuristics with no validation step.
+**Measured precision** (`rag-design.md` §5.4, full detail and the labelled fixture at
+`tests/fixtures/answer_class_validation.csv`): resolution 0.839 (n=31), escalation 0.840
+(n=50), clarification_request 0.885 (n=61). Clarification clears the 0.85 bar set going in;
+resolution and escalation land at it within measurement noise (95% CIs comfortably contain
+0.85) rather than strictly above the point estimate — reported as-is rather than pushed
+further, because continued pattern-fitting against the same fixed 200 rows showed the
+signature of overfitting the sample (one fix swinging resolution precision up 14 points while
+costing escalation precision a comparable amount), not genuine improvement.
+
+**Rejected:** LLM over the full corpus (constraint 5 forecloses this outright, and the
+partial-concession/revision trigger for reopening that constraint is recorded in
+`rag-design.md` §5.7); heuristics with no validation step; whole-answer (not sentence-level)
+pattern matching, an earlier draft's approach that this rewrite replaced once validation
+against real answers showed it conflating a real fix with an unrelated trailing sentence.
 
 ---
 
 ## D6 — English subset only
 
 Filter `language == "en"` at load. Mandated by the brief. The source file also merges two
-dataset generations via the `version` column; confirm which combination yields ~28K English
-rows and record it in `rag-design.md`.
+dataset generations via the `version` column; measured: `language == "en"` alone (no version
+filter — all four version values carry English rows against an identical schema) gives
+28,261 rows, matching the brief's "~28K." After exact-duplicate dedup (a dataset-generation
+merge artifact — every one of 4,460 duplicate pairs is one `version=None` row paired with an
+otherwise-identical `version=400` row) the working corpus is **23,801 distinct records**.
+Full detail in `rag-design.md` §1.
 
 ---
 
@@ -204,22 +255,24 @@ concrete downstream use, which is what D3 promised when canonicalisation was cho
 
 ## Open, pending data
 
-Resolved by profiling the real dataset at CP1 prep — see `rag-design.md`:
-- ~~Clustering method and threshold (D3)~~ → connected components, cosine ≥ 0.92
-  (`rag-design.md` §2.3), grounded in a measured random-pair similarity ceiling
-  (p99.9 = 0.900) vs. a qualitatively-confirmed near-duplicate band (0.90–0.97).
-- ~~Embedding-text composition vs filterable metadata~~ → dense embed text is
-  `subject + body` only; tags/queue/type/priority/answer_class/cluster_size are Chroma
-  metadata only, never concatenated into the embedded text (`rag-design.md` §3).
+All items previously listed here are resolved, with measured numbers, in `rag-design.md`'s
+full rewrite:
+- ~~Clustering method and threshold (D3)~~ → **star (leader) clustering**, not connected
+  components (measured: connected components collapses 74.6% of the corpus into a handful
+  of giant clusters via transitive chaining). Threshold **T = 0.92** with a same-answer-
+  class/answer-similarity/entity-conflict **guard**, `T_a = 0.85` (`rag-design.md` §4).
+- ~~Embedding-text composition vs filterable metadata~~ → `subject + body` (index text,
+  normalised — `rag-design.md` §2) only; queue/type/priority/answer_class/cluster_size/tags
+  are Chroma metadata only, never concatenated into the embedded text (`rag-design.md` §3).
 - ~~Which `version` value yields the ~28K English subset (D6)~~ → none: `language == 'en'`
-  alone yields 28,261 rows; `version` is provenance metadata, not a filter
-  (`rag-design.md` §1.1).
-
-Still open, blocked on CP2 (retrieval-layer build, not ingest):
-- Over-fetch size, RRF constant, MMR λ (D4)
-- Second-pass targeted retrieval query construction
-- `τ_rel` and `SIM_CEILING` recalibration — the measured random-pair baseline (median
-  cosine 0.585, p99.9 0.900) sits *above* the current `τ_rel = 0.55` default from
-  `graph-design.md` §5, meaning most random unrelated pairs would currently register as
-  "relevant." This needs fixing once CP2's fused (RRF) ranking exists to test against,
-  not against raw dense cosine alone (`rag-design.md` §5).
+  alone yields 28,261 rows, 23,801 after exact-duplicate dedup; `version` is provenance
+  metadata, not a filter (`rag-design.md` §1).
+- ~~Over-fetch size, RRF constant, MMR λ (D4)~~ → over-fetch 50/arm, RRF **k = 10** (not the
+  literature default of 60 — measured to structurally suppress lexical-only hits at this
+  corpus's arm-overlap rate), MMR **λ = 0.7** (`rag-design.md` §7–§8).
+- ~~Second-pass targeted retrieval query construction~~ → four variants
+  (`clarification_keywords`, `resolution_only`, `hypothesis_rewrite`, `queue_filtered`),
+  triggers and reasons in `rag-design.md` §10.
+- ~~`τ_rel` and `SIM_CEILING` recalibration~~ → `τ_rel = 0.76` (measured random-pair p95,
+  replacing the old 0.55 default which sat *below* the random-pair median), `SIM_CEILING =
+  0.92` (equal to the clustering threshold T — `rag-design.md` §9).

@@ -49,7 +49,7 @@ Legend: **R** = reducer (`—` = overwrite) · **Writer** = the node(s) allowed 
 ### 2.5 Retrieval
 | Field | Type | R | Writer | Notes |
 |---|---|---|---|---|
-| `retrieved_cases` | `list[RetrievedCase]` | `merge_cases` | `retrieve_initial`, `retrieve_variant`, `tools` | Deduplicated by `case_id`, keeping the max **fused RRF `score`** (used for ranking only — see `RetrievedCase.similarity` for the dense cosine that `assess_evidence` and confidence use), sorted by score, capped at 30 |
+| `retrieved_cases` | `list[RetrievedCase]` | `merge_cases` | `retrieve_initial`, `retrieve_variant`, `tools` | Deduplicated by `case_id`, keeping the copy with max **`similarity`** (not `score` — a fused RRF score is only comparable within one query's own results, not across the different queries a merge combines; `rag-design.md` §11), sorted by similarity, capped at 30 |
 | `retrieval_queries` | `list[RetrievalQuery]` | `operator.add` | retrieval nodes | Audit trail of every query issued, with its filters, round and label. Used by LangSmith retrieval evals. |
 | `retrieval_round` | `int` | — | `retrieve_initial` (=1), `refine_retrieval` (+1) | Loop B counter |
 
@@ -140,8 +140,9 @@ class RetrievedCase(BaseModel):
     tags: list[str] = []
     score: float                   # fused RRF score, higher = closer. Ranking only — not comparable
                                     # across queries or to a similarity threshold. See `similarity`.
-    similarity: float | None = None   # dense cosine vs. the query; this is what τ_rel applies to.
-                                       # None for a lexical-only hit (rag-design.md, to be resolved at CP2).
+    similarity: float               # cosine(ticket embedding, candidate embedding), fetched from Chroma
+                                     # for every fused candidate — including lexical-only hits, not just
+                                     # dense ones (rag-design.md §7). This is what τ_rel/SIM_CEILING apply to.
     cluster_size: int = 1              # from ingest; always 1 for agent-resolved cases
     answer_class: AnswerClass | None = None   # dataset only; None for agent-resolved / not yet applicable
     retrieval_round: int
@@ -257,14 +258,19 @@ class CaseSummary(BaseModel):
 MAX_CASES_IN_STATE = 30
 
 def merge_cases(left: list[RetrievedCase] | None, right: list[RetrievedCase] | None) -> list[RetrievedCase]:
-    """Union by case_id, keep the higher-scoring copy, sort desc, cap size.
-    Safe for concurrent writes from parallel Send branches."""
+    """Union by case_id, keep the copy with higher `similarity`, sort desc, cap size.
+    Keyed on `similarity`, not the fused `score` — an RRF score is only meaningful relative
+    to the other results of the *same* query, so comparing scores across different queries'
+    results (which is exactly what merging retrieval rounds does) isn't a valid comparison.
+    `similarity` (cosine to the ticket) is on one fixed scale regardless of which query or
+    which round found the case (rag-design.md §7/§11). Safe for concurrent writes from
+    parallel Send branches."""
     by_id: dict[str, RetrievedCase] = {c.case_id: c for c in (left or [])}
     for c in right or []:
         prev = by_id.get(c.case_id)
-        if prev is None or c.score > prev.score:
+        if prev is None or c.similarity > prev.similarity:
             by_id[c.case_id] = c
-    return sorted(by_id.values(), key=lambda c: c.score, reverse=True)[:MAX_CASES_IN_STATE]
+    return sorted(by_id.values(), key=lambda c: c.similarity, reverse=True)[:MAX_CASES_IN_STATE]
 
 
 # ---------- graph state ----------

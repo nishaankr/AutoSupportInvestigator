@@ -6,7 +6,10 @@ rag-design.md specifies them. It then measures the retrieval parameters in memor
 matrix stands in for Chroma, and FTS5 is a real in-memory SQLite table. Nothing is persisted
 except the report. The full corpus takes roughly 16 minutes on CPU, mostly embedding.
 
-This is calibration tooling, not the ingest pipeline — ingest/ reuses the rules, not this file.
+This is calibration tooling, not the ingest pipeline. It imports normalisation and
+classification from autosupport.ingest — never a second copy — after an earlier version of
+this file had its own inline copy of the answer_class patterns that silently drifted from
+ingest/classify.py once that module got revised during CP1c validation. One definition only.
 
 Usage: python scripts/rag_calibration.py [--limit N]
 """
@@ -23,6 +26,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+from autosupport.ingest.classify import classify_answer
+from autosupport.ingest.text import ENTITY, index_body, index_text
 
 SNAPSHOT_PATH = Path("data/tickets_en.parquet")
 REPORT_PATH = Path("docs/rag-calibration-output.txt")
@@ -42,112 +48,6 @@ BM25_TERMS = 12
 BM25_MAX_DF = 0.20
 TAU_REL = 0.76
 N_QUERIES = 400
-
-# ---------- normalisation (rag-design.md §2) ----------
-PLACEHOLDER = re.compile(r"<[a-zA-Z_]+>|\{[a-zA-Z_]+\}|\[[A-Z][a-zA-Z ]*\]")
-SALUTATION = re.compile(
-    r"^((dear|hello|hi|greetings|respected)\b[^.!?,]*[,.!]?"
-    r"|(customer )?(support|service)( team)?,"
-    r"|i hope (this|my) (message|email) (finds|reaches) you[^.!?]*[.!?])\s*",
-    re.I,
-)
-
-
-def index_text(s: str, placeholder: str = " ") -> str:
-    s = unicodedata.normalize("NFKC", s)
-    s = s.replace("\\n", " ")  # literal backslash-n, not a newline
-    s = re.sub(r"<br\s*/?>", " ", s, flags=re.I)
-    s = PLACEHOLDER.sub(placeholder, s)
-    return re.sub(r"\s+", " ", s).strip()
-
-
-def index_body(s: str) -> str:
-    s = index_text(s)
-    for _ in range(3):  # salutation and "I hope this message..." can stack
-        s = SALUTATION.sub("", s).strip()
-    return s
-
-
-# ---------- answer_class (rag-design.md §5) ----------
-def _rx(p: str) -> re.Pattern:
-    return re.compile(p, re.I)
-
-
-GENERIC_OBJECT = (
-    r"(a )?(range|variety|number) of|(customi[sz]ed|tailored|comprehensive|various|several|"
-    r"different|our) (solutions|services|options|strategies)|solutions|services|options|"
-    r"assistance|support|help|guidance"
-)
-SUBSTANCE_STEP = _rx(
-    r"\b(we|i) (would )?(recommend|suggest|advise)\b|\bit is (recommended|advisable|best)\b"
-    r"|\byou (will )?need to (create|obtain|install|update|enable|disable|configure|reset|download|use|restart|clear|verify)\b"
-    r"|(^|\bplease |\byou (can|could|may|should) |\bto (resolve|fix|address) (this|the issue),? )"
-    r"(try|restart|reboot|reinstall|update|upgrade|clear|reset|disable|enable|configure|navigate|go to|click|select|open"
-    r"|log (in|out)|sign (in|out)|install|uninstall|download|access|use|check (your|the)|verify (your|the)|ensure|visit"
-    r"|adjust|change|switch|run)\b"
-)
-SUBSTANCE_FACT = _rx(
-    r"\b(we|our (company|team|service|platform|products?|software|system)) (offer|offers|provide|provides|support"
-    r"|supports|accept|accepts|include|includes) (?!" + GENERIC_OBJECT + r")\w+"
-    r"|\b(our|the|this|these) (products?|platform|software|service|system|plan|subscription|devices?|tool|feature"
-    r"|policy|billing (cycle|period)|period|warranty|integration|api|update) (supports?|includes?|offers?|begins?"
-    r"|requires?|allows?|covers?|is (available|compatible|supported|included|designed)|are (available|compatible"
-    r"|supported|included))\b"
-    r"|\b(is|are) (compatible with|available (in|on|for|via)|supported (on|by|for))\b"
-    r"|\bhas been (resolved|fixed|restored|updated|processed|refunded|corrected|issued|credited)\b"
-)
-ESCALATION = _rx(
-    r"\bescalat(e|ed|ing)\b|\bforwarded (your|the|this)\b|\btransferr?(ed|ing) (your|the|this)\b"
-    r"|\b(specialist|specialized|dedicated|senior|expert|second[- ]level|tier[- ]?2) (team|agent|engineers?|support|department)\b"
-    r"|\bhigher (support )?tier\b"
-)
-REQUEST = _rx(
-    r"\b(could|can|would) you (kindly |please )?(provide|share|send|specify|confirm|clarify|tell us|let (us|me) know|describe|list)\b"
-    r"|\b(please|kindly) (kindly )?(provide|share|send( us| me)?|specify|confirm|clarify|describe|list"
-    r"|let (us|me) know (the|which|what|your|if|whether|more))\b"
-    r"|\b(we|i) (need|require|would need|will need) (more|additional|further|some|the|your)\b"
-)
-CALL_TIME = _rx(
-    r"(suitable|convenient|preferred) (time|date)|schedule (a|the) (call|meeting)|\bavailability\b"
-    r"|at your convenience|\breach you\b|\bcontact you\b|\bcall you\b|<X>"
-)
-DEFERRAL = _rx(
-    r"\b(will|shall|'ll) (contact|reach out|call|get back|follow up|be in touch|look into|investigate|review|examine"
-    r"|analy[sz]e|update you|keep you|proceed|revise|launch|implement|arrange|schedule|prepare|work on"
-    r"|provide (guidance|assistance|support|details|information|an update))\b"
-    r"|\b(is|are|am) (currently )?(investigating|looking into|reviewing|working on|examining|analy[sz]ing|prioriti[sz]ing)\b"
-    r"|^investigating\b|\bwould like to (investigate|discuss|schedule|review|look)\b|\blet'?s (arrange|schedule|set up)\b"
-    r"|(happy|glad) to discuss|available (for a call|to discuss)|allow us to contact|sent via (a )?separate|\bhave been sent\b"
-)
-SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
-
-
-def classify_answer(answer: str) -> str:
-    """Returns resolution | escalation | clarification_request | residue (-> fast-tier LLM)."""
-    # Placeholders become <X> here only: "call you at <tel_num>" is itself a handoff signal.
-    text = index_text(answer, placeholder="<X>")
-    substance = escalation = request = handoff = 0
-    for s in (x for x in SENTENCE_SPLIT.split(text) if x):
-        if ESCALATION.search(s):
-            escalation += 1
-        if (SUBSTANCE_STEP.search(s) or SUBSTANCE_FACT.search(s)) and len(s.split()) >= 6:
-            substance += 1
-        if REQUEST.search(s) and not CALL_TIME.search(s):
-            request += 1
-        elif CALL_TIME.search(s) or DEFERRAL.search(s):
-            handoff += 1
-    if substance:
-        return "resolution"
-    if escalation:
-        return "escalation"
-    if request:
-        return "clarification_request"
-    if handoff:
-        return "escalation"
-    return "residue"
-
-
-ENTITY = re.compile(r"\b(?:[A-Z][a-z]*[A-Z0-9][A-Za-z0-9.]*|[A-Z]{2,}[0-9A-Za-z]*|[A-Za-z]+[0-9][A-Za-z0-9.]*)\b")
 
 
 # ---------- report ----------
