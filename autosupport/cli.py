@@ -6,11 +6,52 @@ directly. It must not import config or service at module level either, so that
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import typer
 
+if TYPE_CHECKING:
+    from autosupport.service import TicketOutcome
+
 app = typer.Typer(name="autosupport", help="Autonomous Support Investigation Agent.", no_args_is_help=True)
+
+
+def _render_outcome(outcome: "TicketOutcome") -> None:
+    """Shared by `new` and `show` — both render the same `TicketOutcome` shape."""
+    typer.echo(f"ticket_id: {outcome.ticket_id}")
+    typer.echo(f"status:    {outcome.status}")
+    if outcome.pending_question:
+        typer.echo(f"pending question: {outcome.pending_question}")
+    if outcome.result is None:
+        typer.echo("(no result yet)")
+        return
+
+    result = outcome.result
+    c = result.classification
+    typer.echo(f"classification: queue={c.queue} type={c.type} priority={c.priority} tags={c.tags}")
+    typer.echo(f"rationale: {c.rationale}")
+    typer.echo("")
+    typer.echo("evidence:")
+    for e in result.evidence:
+        typer.echo(f"  [{e.case_id}] {e.stance:<11} {e.answer_class or '-':<21} cluster={e.cluster_size} {e.summary}")
+    typer.echo("")
+    typer.echo(f"analysis:\n{result.analysis}")
+    typer.echo("")
+    typer.echo(f"resolution:\n{result.resolution}")
+    if result.escalation.required:
+        typer.echo("")
+        typer.echo(
+            f"escalation: target_queue={result.escalation.target_queue} trigger={result.escalation.trigger}\n"
+            f"reason: {result.escalation.reason}\nhandoff: {result.escalation.handoff_summary}"
+        )
+    typer.echo("")
+    if result.confidence is None:
+        typer.echo("confidence: not computed (verify not built yet — CP5)")
+    else:
+        typer.echo(f"confidence: {result.confidence.value} ({result.confidence.band})")
+    typer.echo(f"acceptance: {result.acceptance}")
+    if result.errors:
+        typer.echo(f"errors: {result.errors}")
 
 
 @app.command()
@@ -43,7 +84,13 @@ def new(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
     """Start a new ticket and a new thread."""
-    raise NotImplementedError
+    from autosupport import service
+
+    outcome = service.new_ticket(customer_id=customer, subject=subject, body=body)
+    if json_output:
+        typer.echo(outcome.model_dump_json())
+        return
+    _render_outcome(outcome)
 
 
 @app.command()
@@ -64,7 +111,17 @@ def show(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
     """Print the structured CaseResult and status for a ticket."""
-    raise NotImplementedError
+    from autosupport import service
+
+    try:
+        outcome = service.show(ticket_id)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        typer.echo(outcome.model_dump_json())
+        return
+    _render_outcome(outcome)
 
 
 @app.command("list")

@@ -1,6 +1,114 @@
-"""compute_confidence() — the confidence scale's single definition (docs/design/output-schema.md
-§4). Called only from the `verify` node. The formula's constants (K, W_MAX,
-SIM_CEILING, factor floors, penalty step/ceiling, caps, band edges) live here as
-module constants, not in config.py — changing one changes the meaning of every
-stored value, so it goes through code review rather than an environment variable.
-Built at CP5."""
+"""Deterministic confidence formula (output-schema.md §4, decisions.md D12).
+
+Written and unit-tested at CP3 (against the §4.7 worked examples A-E) even though nothing
+in the CP3 graph calls it yet — CP3 has no `verify` node, and output-schema.md §4.5 says
+confidence is computed *only* in `verify`, once per attempt, with the `EvidenceAssessment`
+that only `assess_evidence` (CP5) produces. Wiring this into the graph is CP5's job; the
+formula itself has no such dependency, so there's no reason to defer writing it.
+
+Every constant below defines the scale itself (output-schema.md §4.4 "Constants"), so a
+change to one changes the meaning of every stored value — they live here as module
+constants, not in config.py, and a change should go through code review.
+"""
+
+from __future__ import annotations
+
+import math
+
+from autosupport.graph.state import Confidence, EvidenceAssessment, EvidenceEntry
+
+K = 2.5
+W_MAX = 5.0
+SIM_CEILING = 0.92
+AGREEMENT_FLOOR = 0.4
+RELEVANCE_FLOOR = 0.7
+PENALTY_STEP = 0.10
+PENALTY_CEILING = 0.30
+BAND_HIGH = 0.75
+BAND_MEDIUM = 0.50
+
+# (cap_reason, cap_value), checked in this order; the lowest *applicable* value wins
+# (output-schema.md §4.4 "cap = lowest applicable of").
+_CAP_NO_SUBSTANTIVE_SUPPORT = ("no_substantive_support", 0.20)
+_CAP_INSUFFICIENT = ("insufficient", 0.45)
+_CAP_CONFLICTING = ("conflicting", 0.60)
+_CAP_VERIFICATION_FAILED = ("verification_failed", 0.30)
+
+
+def _cluster_weight(cluster_size: int) -> float:
+    return min(1.0 + math.log2(cluster_size), W_MAX)
+
+
+def _substantive(entry: EvidenceEntry) -> bool:
+    # resolution-only (output-schema.md §4.3, Decision 3): a clarification_request shows
+    # someone asked a question, an escalation/handoff carries no grounded fix, and an open
+    # customer case (answer_class=None) has no answer yet. None of the three add weight.
+    return entry.answer_class == "resolution"
+
+
+def compute_confidence(
+    evidence: list[EvidenceEntry],
+    assessment: EvidenceAssessment,
+    verification_passed: bool | None,
+    tau_rel: float,
+) -> Confidence:
+    """`verification_passed=None` means "before the check" (output-schema.md §4.5 step 1) —
+    the `verification_failed` cap never applies in that case."""
+    supports = [e for e in evidence if e.stance == "supports"]
+    contradicts = [e for e in evidence if e.stance == "contradicts"]
+
+    w_s = sum(_cluster_weight(e.cluster_size) for e in supports if _substantive(e))
+    w_c = sum(_cluster_weight(e.cluster_size) for e in contradicts if _substantive(e))
+
+    support = 1.0 - math.exp(-w_s / K)
+    agreement = w_s / (w_s + w_c) if (w_s + w_c) > 0 else 0.0
+
+    # Relevance checks whether the cases marked "supports" actually match the ticket, on the
+    # dense-similarity scale — independent of the substantive gate above (output-schema.md
+    # §4.4: "That signal is independent of the model's stance judgements").
+    ranked_similarities = sorted(
+        (e.similarity for e in supports if e.similarity is not None), reverse=True
+    )[:3]
+    if ranked_similarities:
+        relevance = sum(
+            _clamp((sim - tau_rel) / (SIM_CEILING - tau_rel), 0.0, 1.0) for sim in ranked_similarities
+        ) / len(ranked_similarities)
+    else:
+        relevance = 0.0
+
+    base = support * (AGREEMENT_FLOOR + (1 - AGREEMENT_FLOOR) * agreement)
+    base *= RELEVANCE_FLOOR + (1 - RELEVANCE_FLOOR) * relevance
+    penalty = min(PENALTY_STEP * len(assessment.missing_slots), PENALTY_CEILING)
+
+    cap_reason, cap_value = _lowest_applicable_cap(w_s, assessment.verdict, verification_passed)
+    value = round(_clamp(min(base - penalty, cap_value), 0.0, 1.0), 2)
+
+    return Confidence(
+        value=value,
+        support=round(support, 3),
+        agreement=round(agreement, 3),
+        relevance=round(relevance, 3),
+        penalty=round(penalty, 3),
+        cap_reason=cap_reason,
+    )
+
+
+def _lowest_applicable_cap(
+    w_s: float, verdict: str, verification_passed: bool | None
+) -> tuple[str | None, float]:
+    candidates: list[tuple[str, float]] = []
+    if w_s == 0:
+        candidates.append(_CAP_NO_SUBSTANTIVE_SUPPORT)
+    if verdict == "insufficient":
+        candidates.append(_CAP_INSUFFICIENT)
+    if verdict == "conflicting":
+        candidates.append(_CAP_CONFLICTING)
+    if verification_passed is False:
+        candidates.append(_CAP_VERIFICATION_FAILED)
+    if not candidates:
+        return None, 1.0
+    return min(candidates, key=lambda c: c[1])
+
+
+def _clamp(x: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, x))

@@ -1,8 +1,7 @@
-"""SQLite connection + schema for `data/autosupport.sqlite` (architecture.md §2.2).
+"""SQLite connection + schema for `data/autosupport.sqlite` (architecture.md §2.2,
+case-persistence.md, memory-design.md).
 
-Plain `sqlite3`, no ORM — three tables don't need one (CLAUDE.md dependency policy). This
-module owns schema creation; `cases` and `customers` are added when CP3/CP6 need them —
-until then this only creates `dataset_tickets` and its FTS5 index.
+Plain `sqlite3`, no ORM — five tables don't need one (CLAUDE.md dependency policy).
 """
 
 from __future__ import annotations
@@ -49,6 +48,30 @@ CREATE VIRTUAL TABLE IF NOT EXISTS dataset_tickets_fts USING fts5(
     tokenize = 'unicode61 remove_diacritics 2'
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS dataset_tickets_fts_vocab USING fts5vocab(dataset_tickets_fts, 'row');
+
+CREATE TABLE IF NOT EXISTS cases (
+    ticket_id       TEXT PRIMARY KEY,
+    customer_id     TEXT NOT NULL,
+    thread_id       TEXT NOT NULL UNIQUE,
+    status          TEXT NOT NULL,
+    subject         TEXT NOT NULL,
+    body            TEXT NOT NULL,
+    submitted_at    TEXT NOT NULL,
+    classification  TEXT,
+    pending_question TEXT,
+    final_output    TEXT,
+    indexed_at      TEXT,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cases_customer_updated ON cases(customer_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_cases_status ON cases(status);
+
+CREATE TABLE IF NOT EXISTS customers (
+    customer_id TEXT PRIMARY KEY,
+    profile     TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
 """
 
 

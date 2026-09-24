@@ -253,6 +253,49 @@ concrete downstream use, which is what D3 promised when canonicalisation was cho
 
 ---
 
+## D13 — CP3 vertical slice: scoped deviations and a structured-output finding
+
+CP3 (`intake → (load_memory ∥ retrieve_initial) → triage → resolve → persist_case → END`)
+cuts the full graph-design.md graph down to five nodes. Four places where the full-design
+docs don't (yet) fit that shape were flagged and decided before writing code, not resolved
+silently:
+
+- **Q1 — `confidence`/`verification`.** Both are `Optional` on `CaseResult` until CP5.
+  There's no `verify` node yet, and `output-schema.md` §4.5 computes confidence only inside
+  it. `graph/confidence.py` is written and unit-tested now (against the §4.7 worked examples)
+  even though nothing calls it until CP5 wires `verify` in.
+- **Q2 — `evidence` without `investigate`.** `resolve`'s structured output includes the
+  `EvidenceItem` list directly; `graph/evidence.py::enrich()` does the same code-side
+  enrichment `investigate` will call at CP4. `enrich()` itself isn't CP3-specific.
+- **Q3 — `ticket_id` vs `thread_id`.** `service.new_ticket()` generates `ticket_id` and
+  builds `thread_id` *before* invoking the graph — the thread has to exist to invoke it at
+  all. `intake` only mirrors `config.thread_id` into state. This also fixed a self-
+  contradiction between `state-schema.md` §2.1 ("`intake` assigns `ticket_id`") and §4.2
+  ("the CLI builds `thread_id`") that predated CP3. Full detail: `case-persistence.md` §6.
+- **Q4 — `cases`/`customers` schemas.** Written up front as `case-persistence.md` and
+  `memory-design.md`, reviewed before any code, rather than inferred implicitly while
+  writing `intake`/`load_memory`/`persist_case`.
+
+Full list, including the smaller flagged items (F1–F11: `EvidenceEntry.cluster_size`,
+`datetime.utcnow` deprecation, `neighbor_agreement` computed by code not the model, etc.),
+is in the CP3 plan this checkpoint was built from.
+
+**Structured-output reliability finding, applied everywhere `.with_structured_output` is
+called:** `main_llm()`/`fast_llm()` (`claude-sonnet-5`, `claude-haiku-4-5`) both run with
+reasoning enabled by default. `langchain-anthropic`'s default `method="function_calling"`
+doesn't force the tool call when reasoning is on (its own docstring says so), and reproduced
+directly against the live API: on a nontrivial prompt, the model would reliably return a
+malformed or incomplete tool call — a required field missing, or one field's text bleeding
+into another. Claude's native structured-output feature, `method="json_schema"`, doesn't
+depend on forced tool choice and was reliable in the same repro, with the exact same schema
+and prompt, every time. Every `.with_structured_output(...)` call in the graph passes
+`method="json_schema"` (`triage.py`, `resolve.py`, and every LLM node CP4+ adds). This isn't
+a deviation from CLAUDE.md's "every structured LLM step uses `.with_structured_output`" rule
+— it's the same call, with the one keyword argument that makes it actually reliable for
+these two models.
+
+---
+
 ## Open, pending data
 
 All items previously listed here are resolved, with measured numbers, in `rag-design.md`'s

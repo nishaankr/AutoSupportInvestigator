@@ -14,6 +14,7 @@ from autosupport.rag.embedder import embed
 from autosupport.store import db as store_db
 
 OVERFETCH = 50
+SNIPPET_CHARS = 600  # state-schema.md §1.2: retrieved cases carry snippets, not full text
 _TAG_COLUMNS = [f"tag_{i}" for i in range(1, 9)]
 
 
@@ -30,6 +31,8 @@ class SearchResult:
     priority: str
     answer_class: str
     cluster_size: int
+    body_snippet: str
+    answer_snippet: str
     tags: list[str] = field(default_factory=list)
 
 
@@ -109,6 +112,8 @@ def _search(conn: sqlite3.Connection, text: str, k: int, where: dict | None) -> 
                 priority=row["priority"],
                 answer_class=row["answer_class"],
                 cluster_size=row["cluster_size"] or 1,
+                body_snippet=(row["body_ix"] or "")[:SNIPPET_CHARS],
+                answer_snippet=(row["answer_ix"] or "")[:SNIPPET_CHARS],
                 tags=[row[c] for c in _TAG_COLUMNS if row[c]],
             )
         )
@@ -119,7 +124,10 @@ def _fetch_rows(conn: sqlite3.Connection, case_ids: list[str]) -> dict[str, sqli
     if not case_ids:
         return {}
     placeholders = ",".join("?" for _ in case_ids)
-    columns = "case_id, subject, queue, type, priority, answer_class, cluster_size, " + ", ".join(_TAG_COLUMNS)
+    columns = (
+        "case_id, subject, queue, type, priority, answer_class, cluster_size, body_ix, answer_ix, "
+        + ", ".join(_TAG_COLUMNS)
+    )
     rows = conn.execute(
         f"SELECT {columns} FROM dataset_tickets WHERE case_id IN ({placeholders})", case_ids
     ).fetchall()
