@@ -204,10 +204,22 @@ concrete downstream use, which is what D3 promised when canonicalisation was cho
 
 ## Open, pending data
 
-- Clustering method and threshold (D3)
-- Embedding-text composition vs filterable metadata
+Resolved by profiling the real dataset at CP1 prep — see `rag-design.md`:
+- ~~Clustering method and threshold (D3)~~ → connected components, cosine ≥ 0.92
+  (`rag-design.md` §2.3), grounded in a measured random-pair similarity ceiling
+  (p99.9 = 0.900) vs. a qualitatively-confirmed near-duplicate band (0.90–0.97).
+- ~~Embedding-text composition vs filterable metadata~~ → dense embed text is
+  `subject + body` only; tags/queue/type/priority/answer_class/cluster_size are Chroma
+  metadata only, never concatenated into the embedded text (`rag-design.md` §3).
+- ~~Which `version` value yields the ~28K English subset (D6)~~ → none: `language == 'en'`
+  alone yields 28,261 rows; `version` is provenance metadata, not a filter
+  (`rag-design.md` §1.1).
+
+Still open, blocked on CP2 (retrieval-layer build, not ingest):
 - Over-fetch size, RRF constant, MMR λ (D4)
 - Second-pass targeted retrieval query construction
-- Which `version` value yields the ~28K English subset (D6)
-
-All blocked on profiling the actual dataset. They belong in `rag-design.md`, written at CP1.
+- `τ_rel` and `SIM_CEILING` recalibration — the measured random-pair baseline (median
+  cosine 0.585, p99.9 0.900) sits *above* the current `τ_rel = 0.55` default from
+  `graph-design.md` §5, meaning most random unrelated pairs would currently register as
+  "relevant." This needs fixing once CP2's fused (RRF) ranking exists to test against,
+  not against raw dense cosine alone (`rag-design.md` §5).
