@@ -1,0 +1,40 @@
+[project]
+name = "autosupport"
+version = "0.1.0"
+description = "Autonomous Support Investigation Agent — a local LangGraph agent that investigates support tickets against a historical corpus."
+readme = "README.md"
+authors = [
+    { name = "nishaankr", email = "nishaankr@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "chromadb>=1.5.9",
+    "datasets>=5.0.1",
+    "langchain>=1.4.2",
+    "langchain-anthropic>=1.7.4",
+    "langchain-chroma>=1.1.0",
+    "langgraph>=1.2.12",
+    "langgraph-checkpoint-sqlite>=3.1.1",
+    "langsmith>=0.14.0",
+    "pydantic>=2.13.5",
+    "pydantic-settings>=2.15.0",
+    "rich>=15.0.0",
+    "sentence-transformers>=6.1.0",
+    "typer>=0.27.2",
+]
+
+[project.scripts]
+autosupport = "autosupport.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "autosupport"
+module-root = ""
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

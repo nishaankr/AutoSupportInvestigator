@@ -1,0 +1,384 @@
+# State Schema — LangGraph `AgentState`
+
+> **Status:** Draft v1 · defines every state field, its reducer, the checkpointer, and the `thread_id` scheme.
+> **Companion doc:** `graph-design.md` (node names and counters referenced below).
+> **Working assumptions:** Python 3.11+, LangGraph 1.x, Pydantic v2, SQLite checkpointer via `langgraph-checkpoint-sqlite`.
+
+---
+
+## 1. Design principles
+
+1. **State is working memory, SQLite is the system of record.** The graph state holds only what the current ticket's reasoning needs. Durable facts (the open case, the final case, the customer profile) are written to the application DB by specific nodes. State is never treated as the database.
+2. **Keep it lean.** Retrieved cases carry *snippets* (≤ 600 chars of body, ≤ 600 of answer). Full text is fetched on demand with `get_ticket_by_id`. This keeps checkpoints small and prompts cheap.
+3. **Every key written by parallel branches has a reducer.** The keys concerned are `retrieved_cases`, `retrieval_queries`, `tool_log`, `messages` and `errors`.
+4. **Counters live in state, limits live in config.** Counters are overwritten (they have no reducer) and each counter has exactly one writer node.
+5. **Typed sub-objects are Pydantic models.** The top-level state is a `TypedDict`, which is LangGraph's most idiomatic form and supports per-key reducers.
+
+---
+
+## 2. Field reference
+
+Legend: **R** = reducer (`—` = overwrite) · **Writer** = the node(s) allowed to write the key.
+
+### 2.1 Identity & input
+| Field | Type | R | Writer | Notes |
+|---|---|---|---|---|
+| `ticket_id` | `str` | — | `intake` | Format `T-YYYYMMDD-<6 hex>`, e.g. `T-20260924-7f3a1c` |
+| `customer_id` | `str` | — | input | Required. It's the key into long-term memory. |
+| `thread_id` | `str` | — | `intake` | Mirrors `config.thread_id` so nodes and logs can see it |
+| `ticket` | `TicketInput` | — | input | subject, body, optional customer-supplied priority/tags, `submitted_at` |
+| `status` | `CaseStatus` | — | several | `open → investigating → awaiting_user → investigating → … → resolved \| escalated` |
+
+### 2.2 Short-term conversation
+| Field | Type | R | Writer | Notes |
+|---|---|---|---|---|
+| `messages` | `list[AnyMessage]` | `add_messages` | `intake`, `investigate`, `tools`, `ask_user`, `confirm_resolution` | The ticket as the first HumanMessage, AI turns, tool calls, ToolMessages, clarification answers, and acceptance feedback |
+
+### 2.3 Memory (loaded)
+| Field | Type | R | Writer | Notes |
+|---|---|---|---|---|
+| `customer_profile` | `CustomerMemory \| None` | — | `load_memory` | Read-only in the graph. Updates are written to SQLite by `update_memory`, not to state. |
+| `customer_history` | `list[CaseSummary]` | — | `load_memory` | The customer's open cases plus their last N=5 resolved or escalated cases |
+
+### 2.4 Triage
+| Field | Type | R | Writer | Notes |
+|---|---|---|---|---|
+| `classification` | `Classification \| None` | — | `triage` (may be revised by `investigate`) | queue, type, priority, tags, rationale, `neighbor_agreement` |
+| `active_skills` | `list[str]` | — | `triage` | e.g. `["investigation", "billing"]` |
+
+### 2.5 Retrieval
+| Field | Type | R | Writer | Notes |
+|---|---|---|---|---|
+| `retrieved_cases` | `list[RetrievedCase]` | `merge_cases` | `retrieve_initial`, `retrieve_variant`, `tools` | Deduplicated by `case_id`, keeping the max **fused RRF `score`** (used for ranking only — see `RetrievedCase.similarity` for the dense cosine that `assess_evidence` and confidence use), sorted by score, capped at 30 |
+| `retrieval_queries` | `list[RetrievalQuery]` | `operator.add` | retrieval nodes | Audit trail of every query issued, with its filters, round and label. Used by LangSmith retrieval evals. |
+| `retrieval_round` | `int` | — | `retrieve_initial` (=1), `refine_retrieval` (+1) | Loop B counter |
+
+### 2.6 Investigation
+| Field | Type | R | Writer | Notes |
+|---|---|---|---|---|
+| `hypothesis` | `Hypothesis \| None` | — | `investigate` | The current best explanation, with supporting and contradicting case IDs |
+| `evidence` | `list[EvidenceEntry]` | — | `investigate` | The curated evidence list. It is **replaced** each round rather than appended, because it's the model's current judgement. The model emits `EvidenceItem` (`case_id`, `summary`, `stance`); `investigate` enriches each into an `EvidenceEntry` with `source`, `subject`, `answer_class`, `cluster_size` and `similarity` from SQLite and `retrieved_cases` before writing state. Full definition in `output-schema.md` §3. |
+| `evidence_assessment` | `EvidenceAssessment \| None` | — | `assess_evidence` | verdict, metrics, clusters, missing slots, `next_action` |
+| `tool_calls_this_round` | `int` | — | `tools` (+n), and reset to 0 when a new round starts | Loop A counter |
+| `tool_log` | `list[ToolCallRecord]` | `operator.add` | `tools` | name, args, duration, ok/error. Used by LangSmith tool-usage evals. |
+
+### 2.7 Clarification (human-in-the-loop)
+| Field | Type | R | Writer | Notes |
+|---|---|---|---|---|
+| `pending_question` | `str \| None` | — | `assess_evidence` sets it · `ask_user` clears it | Generated **before** the interrupt node, so a resume can't regenerate it |
+| `clarifications` | `list[ClarificationTurn]` | `operator.add` | `ask_user` | Question/answer pairs. `update_memory` checks them for durable facts. |
+| `clarification_count` | `int` | — | `ask_user` | Loop C counter |
+
+### 2.8 Decision, draft & verification
+| Field | Type | R | Writer | Notes |
+|---|---|---|---|---|
+| `decision` | `Literal["resolve","escalate"] \| None` | — | `assess_evidence`, `resolve`, `escalate` | |
+| `draft` | `DraftResponse \| None` | — | `resolve`, `escalate` | analysis, resolution text, escalation draft. Cited case IDs are never stored separately — they're extracted from the prose by the citation regex in `output-schema.md` §3.4. |
+| `confidence` | `Confidence \| None` | — | `verify` only | Computed deterministically from the evidence, not model-reported. `resolve` and `escalate` never write it. Formula, scale and bands in `output-schema.md` §4. |
+| `verification` | `VerificationResult \| None` | — | `verify` | passed, unsupported claims, `recommended_action` |
+| `verify_attempts` | `int` | — | `verify` | Loop D counter |
+
+### 2.9 Acceptance & output
+| Field | Type | R | Writer | Notes |
+|---|---|---|---|---|
+| `user_acceptance` | `Literal["pending","accepted","rejected"] \| None` | — | `confirm_resolution` | Only accepted resolutions get indexed |
+| `user_feedback` | `str \| None` | — | `confirm_resolution` | |
+| `revision_count` | `int` | — | `confirm_resolution` | Loop E counter |
+| `final_output` | `CaseResult \| None` | — | `persist_case` | The structured deliverable (see `output-schema.md`) |
+| `errors` | `list[str]` | `operator.add` | any | Non-fatal errors surfaced in the output and the logs |
+
+---
+
+## 3. Code sketch (`autosupport/graph/state.py`)
+
+```python
+from __future__ import annotations
+
+import operator
+from datetime import datetime
+from typing import Annotated, Literal, TypedDict
+
+from langchain_core.messages import AnyMessage
+from langgraph.graph.message import add_messages
+from pydantic import BaseModel, Field
+
+# ---------- enums ----------
+CaseStatus = Literal["open", "investigating", "awaiting_user", "resolved", "escalated"]
+Verdict = Literal["sufficient", "insufficient", "conflicting"]
+NextAction = Literal["resolve", "escalate", "refine_retrieval", "ask_user"]
+Priority = Literal["low", "medium", "high", "critical"]
+AnswerClass = Literal["resolution", "clarification_request", "escalation"]  # output-schema.md §7
+
+
+# ---------- sub-models ----------
+class TicketInput(BaseModel):
+    subject: str
+    body: str
+    customer_priority: Priority | None = None
+    customer_tags: list[str] = []
+    submitted_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class Classification(BaseModel):
+    queue: str
+    type: str                      # e.g. Incident / Request / Problem / Change
+    priority: Priority
+    tags: list[str]
+    rationale: str
+    neighbor_agreement: float      # top-queue share among retrieved neighbours (0-1)
+
+
+class RetrievedCase(BaseModel):
+    case_id: str                   # "HF-<row>" for dataset, "T-..." for agent-resolved
+    source: Literal["dataset", "agent_resolved"]
+    subject: str
+    body_snippet: str
+    answer_snippet: str
+    queue: str | None = None
+    type: str | None = None
+    priority: str | None = None
+    tags: list[str] = []
+    score: float                   # fused RRF score, higher = closer. Ranking only — not comparable
+                                    # across queries or to a similarity threshold. See `similarity`.
+    similarity: float | None = None   # dense cosine vs. the query; this is what τ_rel applies to.
+                                       # None for a lexical-only hit (rag-design.md, to be resolved at CP2).
+    cluster_size: int = 1              # from ingest; always 1 for agent-resolved cases
+    answer_class: AnswerClass | None = None   # dataset only; None for agent-resolved / not yet applicable
+    retrieval_round: int
+    query_label: str               # "initial" | "hypothesis_rewrite" | "queue_filtered" | "tool:search" ...
+
+
+class RetrievalQuery(BaseModel):
+    text: str
+    filters: dict = {}
+    k: int
+    round: int
+    label: str
+    n_results: int
+
+
+class Hypothesis(BaseModel):
+    statement: str
+    root_cause_category: str
+    supporting_case_ids: list[str]
+    contradicting_case_ids: list[str] = []
+
+
+class EvidenceItem(BaseModel):     # what the model emits
+    case_id: str
+    summary: str                   # one line: problem → what resolved it
+    stance: Literal["supports", "contradicts", "neutral"]
+
+
+class EvidenceEntry(EvidenceItem):  # what `investigate` writes to state, after enrichment
+    source: Literal["dataset", "agent_resolved", "customer_history"]
+    subject: str
+    answer_class: AnswerClass | None
+    cluster_size: int = 1
+    similarity: float | None = None
+    approach: str | None = None    # filled by persist_case from evidence_assessment.clusters
+
+
+class ApproachCluster(BaseModel):
+    label: str
+    case_ids: list[str]
+
+
+class EvidenceAssessment(BaseModel):
+    verdict: Verdict
+    relevant_count: int
+    top_score: float
+    clusters: list[ApproachCluster]
+    dominant_share: float
+    missing_slots: list[str] = []
+    gap_is_retrievable: bool
+    escalation_rule_hit: str | None = None   # which rule, if any
+    next_action: NextAction
+    reason: str
+
+
+class ToolCallRecord(BaseModel):
+    name: str
+    args: dict
+    ok: bool
+    duration_ms: int
+    round: int
+
+
+class ClarificationTurn(BaseModel):
+    question: str
+    answer: str
+    asked_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class EscalationDraft(BaseModel):  # what the model emits inside a draft; output-schema.md §7 wraps
+    target_queue: str              # this into the persisted EscalationBlock (adds required/trigger/rule).
+    reason: str
+    handoff_summary: str
+
+
+class DraftResponse(BaseModel):
+    analysis: str
+    resolution: str
+    escalation: EscalationDraft | None   # None when decision == "resolve"
+    # no cited_case_ids field: citations are extracted from analysis/resolution/handoff_summary
+    # prose by the regex in output-schema.md §3.4, so there's nothing to drift out of sync.
+
+
+class VerificationResult(BaseModel):
+    passed: bool
+    unsupported_claims: list[str] = []
+    issues: list[str] = []
+    recommended_action: Literal["none", "re_reason", "re_retrieve"] = "none"
+
+
+class CustomerMemory(BaseModel):   # full schema lives in memory-design.md
+    customer_id: str
+    facts: dict[str, str] = {}     # e.g. {"product": "...", "plan": "enterprise", "os": "Windows 11"}
+    flags: list[str] = []          # e.g. ["vip", "repeat_unresolved"]
+    tried_fixes: list[str] = []
+    preferences: dict[str, str] = {}
+
+
+class CaseSummary(BaseModel):
+    case_id: str
+    status: CaseStatus
+    subject: str
+    queue: str | None
+    resolution_snippet: str | None
+    updated_at: datetime
+
+
+# CaseResult, Confidence and EscalationBlock (the persisted form) are defined in full in
+# output-schema.md §7. They are not sketched here to avoid a second copy drifting out of sync.
+
+
+# ---------- reducers ----------
+MAX_CASES_IN_STATE = 30
+
+def merge_cases(left: list[RetrievedCase] | None, right: list[RetrievedCase] | None) -> list[RetrievedCase]:
+    """Union by case_id, keep the higher-scoring copy, sort desc, cap size.
+    Safe for concurrent writes from parallel Send branches."""
+    by_id: dict[str, RetrievedCase] = {c.case_id: c for c in (left or [])}
+    for c in right or []:
+        prev = by_id.get(c.case_id)
+        if prev is None or c.score > prev.score:
+            by_id[c.case_id] = c
+    return sorted(by_id.values(), key=lambda c: c.score, reverse=True)[:MAX_CASES_IN_STATE]
+
+
+# ---------- graph state ----------
+class AgentState(TypedDict, total=False):
+    # identity & input
+    ticket_id: str
+    customer_id: str
+    thread_id: str
+    ticket: TicketInput
+    status: CaseStatus
+    # short-term conversation
+    messages: Annotated[list[AnyMessage], add_messages]
+    # memory
+    customer_profile: CustomerMemory | None
+    customer_history: list[CaseSummary]
+    # triage
+    classification: Classification | None
+    active_skills: list[str]
+    # retrieval
+    retrieved_cases: Annotated[list[RetrievedCase], merge_cases]
+    retrieval_queries: Annotated[list[RetrievalQuery], operator.add]
+    retrieval_round: int
+    # investigation
+    hypothesis: Hypothesis | None
+    evidence: list[EvidenceEntry]
+    evidence_assessment: EvidenceAssessment | None
+    tool_calls_this_round: int
+    tool_log: Annotated[list[ToolCallRecord], operator.add]
+    # clarification
+    pending_question: str | None
+    clarifications: Annotated[list[ClarificationTurn], operator.add]
+    clarification_count: int
+    # decision / draft / verification
+    decision: Literal["resolve", "escalate"] | None
+    draft: DraftResponse | None
+    confidence: Confidence | None      # output-schema.md §7; written only by verify
+    verification: VerificationResult | None
+    verify_attempts: int
+    # acceptance / output
+    user_acceptance: Literal["pending", "accepted", "rejected"] | None
+    user_feedback: str | None
+    revision_count: int
+    final_output: CaseResult | None
+    errors: Annotated[list[str], operator.add]
+
+
+# ---------- public I/O schemas ----------
+class InputState(TypedDict):
+    customer_id: str
+    ticket: TicketInput
+
+class OutputState(TypedDict):
+    ticket_id: str
+    status: CaseStatus
+    final_output: CaseResult | None
+    pending_question: str | None
+
+# builder = StateGraph(AgentState, input_schema=InputState, output_schema=OutputState)
+```
+
+**Initial values:** `intake` initialises every counter (`retrieval_round=0`, `clarification_count=0`, `verify_attempts=0`, `revision_count=0`, `tool_calls_this_round=0`), sets `user_acceptance=None` and `status="open"`. Routers can then read counters without `.get()` defaults.
+
+---
+
+## 4. Checkpointer
+
+**Choice: `SqliteSaver` (`langgraph-checkpoint-sqlite`), file `data/checkpoints.sqlite`.**
+
+| Option | Verdict | Reason |
+|---|---|---|
+| `InMemorySaver` | ❌ (unit tests only) | The CLI process exits between `new` and `resume`, which is exactly the clarification demo. An in-memory checkpoint would be lost and the resume would fail. |
+| **`SqliteSaver`** | ✅ | It persists across process restarts, needs no server and is a single file. That matches the "runs locally" requirement, and it follows the same approach as the SQLite application DB. |
+| `PostgresSaver` | ❌ | It adds an infrastructure dependency the brief explicitly says not to spend time on. We have no concurrency requirement that would justify it. |
+
+**Implementation notes**
+```python
+import sqlite3
+from langgraph.checkpoint.sqlite import SqliteSaver
+
+conn = sqlite3.connect("data/checkpoints.sqlite", check_same_thread=False)
+checkpointer = SqliteSaver(conn)
+graph = builder.compile(checkpointer=checkpointer)
+```
+- The checkpoint DB is a **separate file** from the application DB (`data/autosupport.sqlite`), so either can be wiped independently. For example, resetting all threads doesn't delete resolved cases or customer memory.
+- Checkpoints are written after every superstep. An interrupt therefore leaves the complete `AgentState` plus the pending task on disk, and the resume picks up at the interrupted node.
+- Pydantic sub-models are serialised by LangGraph's default serializer. If a LangGraph version rejects any type at deserialisation, the fallback is to store sub-objects as `model_dump()` dicts and rehydrate them in nodes. The node code would change; this schema wouldn't.
+- Checkpoints are **not** long-term memory. A new ticket starts a new thread with empty state, and cross-ticket knowledge comes only from `load_memory`, which reads the customer DB.
+
+---
+
+## 5. `thread_id` scheme
+
+**Rule: one thread per ticket.** `thread_id = f"{customer_id}:{ticket_id}"`, e.g. `C-1042:T-20260924-7f3a1c`.
+
+| Scenario | Thread behaviour |
+|---|---|
+| New ticket | `intake` creates `ticket_id` and the CLI builds `thread_id`. Both are stored on the `cases` row in SQLite (`cases.thread_id`). |
+| Clarification answer / acceptance | The same thread. `autosupport resume <ticket_id>` looks up `thread_id` in `cases` and calls `graph.invoke(Command(resume=...), {"configurable": {"thread_id": ...}})`. |
+| Follow-up on a closed ticket ("still broken") | It **reopens the same ticket's thread**. The CLI sends a new invocation with the follow-up text on the same `thread_id`, and the graph re-enters at `intake`. `intake` sees that `ticket_id` is already set, so it doesn't create a new case: it sets the existing row back to `open`, resets the loop counters, and keeps `messages`, `clarifications` and `retrieved_cases`. The prior context is the short-term memory for the new round. |
+| Same customer, a different issue | A **new ticket, so a new thread**. Continuity comes from long-term memory (`customer_profile`) and `customer_history`, not from the checkpointer. |
+| LangSmith eval runs | `thread_id = f"eval:{run_id}:{example_id}"` so eval runs never collide with demo threads, and `require_acceptance=false`. |
+
+**Why the customer prefix?** It lets the CLI and debugging tools list a customer's threads with a simple prefix match. It also makes the ownership of a thread obvious in LangSmith traces, where `thread_id` is attached as metadata.
+
+**Dataset tickets** don't have threads. They exist only as indexed documents with IDs `HF-<row_index>` (assigned at ingest; see `rag-design.md`).
+
+---
+
+## 6. What is **not** in state (by design)
+
+| Item | Where it lives | Why |
+|---|---|---|
+| Full bodies/answers of historical tickets | Chroma + SQLite, fetched via `get_ticket_by_id` | Keeps checkpoints small and prompts focused |
+| Skill prompt text | `skills/*.md`, loaded per node | State stores only skill *names* (`active_skills`) |
+| Run limits and thresholds | `config["configurable"]` | They're run policy, not ticket facts. This lets eval runs tune them without migrating state. |
+| Customer profile *updates* | SQLite `customers` table, written by `update_memory` | Long-term memory must outlive the thread |
+| Embeddings | Chroma | Never round-trip vectors through state |
