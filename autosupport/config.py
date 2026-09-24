@@ -19,6 +19,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_ENV_FILE = _REPO_ROOT / ".env"
 _DEFAULT_DATA_DIR = _REPO_ROOT / "data"
+# `provider:` prefix of a model string -> (Settings field holding its key, env var name).
+PROVIDER_KEYS = {"anthropic": ("anthropic_api_key", "ANTHROPIC_API_KEY"), "groq": ("groq_api_key", "GROQ_API_KEY")}
 
 
 class Settings(BaseSettings):
@@ -29,14 +31,19 @@ class Settings(BaseSettings):
     )
 
     # --- secrets & third-party config — no AUTOSUPPORT_ prefix, matches .env.example ---
-    anthropic_api_key: SecretStr = Field(validation_alias="ANTHROPIC_API_KEY")
+    # Each provider's key is required only if a configured model uses that provider (validator below).
+    anthropic_api_key: SecretStr | None = Field(default=None, validation_alias="ANTHROPIC_API_KEY")
+    groq_api_key: SecretStr | None = Field(default=None, validation_alias="GROQ_API_KEY")
     langsmith_api_key: SecretStr | None = Field(default=None, validation_alias="LANGSMITH_API_KEY")
     langsmith_tracing: bool = Field(default=True, validation_alias="LANGSMITH_TRACING")
     langsmith_project: str = Field(default="autosupport", validation_alias="LANGSMITH_PROJECT")
 
     # --- models (architecture.md §2.3) ---
-    main_model: str = "anthropic:claude-sonnet-5"
-    fast_model: str = "anthropic:claude-haiku-4-5"
+    main_model: str = "groq:openai/gpt-oss-120b"
+    fast_model: str = "groq:openai/gpt-oss-20b"
+    # The offline-eval judge (evaluation-design.md §4) is configured separately from the tiers
+    # under test, so swapping a tier's model never changes who grades it.
+    judge_model: str = "groq:openai/gpt-oss-120b"
     embed_model: str = "BAAI/bge-small-en-v1.5"
     # No main-tier temperature: Claude Sonnet 5 rejects `temperature` outright (llm.py).
     fast_temperature: float = 0.0
@@ -56,31 +63,34 @@ class Settings(BaseSettings):
     # recursion limit a pure backstop that never fires before a loop counter does (D15 F2).
     recursion_limit: int = 100
 
-    @field_validator("main_model", "fast_model")
+    @field_validator("main_model", "fast_model", "judge_model")
     @classmethod
-    def _model_string_has_provider(cls, v: str) -> str:
-        if ":" not in v:
+    def _model_string_has_known_provider(cls, v: str) -> str:
+        provider = v.split(":", 1)[0] if ":" in v else None
+        if provider not in PROVIDER_KEYS:
             raise ValueError(
-                f"model string {v!r} must be 'provider:model', e.g. 'anthropic:claude-sonnet-5'"
+                f"model string {v!r} must be 'provider:model' with provider in {sorted(PROVIDER_KEYS)}, "
+                "e.g. 'anthropic:claude-sonnet-5' or 'groq:openai/gpt-oss-20b'"
             )
         return v
 
-    @field_validator("langsmith_api_key", mode="before")
+    @field_validator("langsmith_api_key", "anthropic_api_key", "groq_api_key", mode="before")
     @classmethod
-    def _blank_langsmith_key_is_absent(cls, v: object) -> object:
-        # .env.example ships `LANGSMITH_API_KEY=` — present but blank, not unset. Without
-        # this, the model_validator below only ever sees a (falsy) SecretStr, never None,
-        # so an unfilled key with tracing on would silently pass validation.
+    def _blank_key_is_absent(cls, v: object) -> object:
+        # .env.example ships `KEY=` — present but blank, not unset. Without this, the
+        # validators below only ever see a (falsy) SecretStr, never None, so an unfilled key
+        # would silently pass validation.
         if isinstance(v, str) and not v.strip():
             return None
         return v
 
-    @field_validator("anthropic_api_key")
-    @classmethod
-    def _anthropic_key_not_blank(cls, v: SecretStr) -> SecretStr:
-        if not v.get_secret_value().strip():
-            raise ValueError("ANTHROPIC_API_KEY must not be blank")
-        return v
+    @model_validator(mode="after")
+    def _provider_keys_present(self) -> "Settings":
+        for model in (self.main_model, self.fast_model, self.judge_model):
+            field, env_name = PROVIDER_KEYS[model.split(":", 1)[0]]
+            if getattr(self, field) is None:
+                raise ValueError(f"{model!r} is configured but {env_name} is not set in .env")
+        return self
 
     @field_validator("data_dir", mode="after")
     @classmethod

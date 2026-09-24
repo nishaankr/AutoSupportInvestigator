@@ -8,6 +8,7 @@ future filtering changes, which a post-filter index wouldn't be (decisions.md D1
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -16,6 +17,16 @@ from autosupport.config import settings
 from autosupport.ingest.text import MIN_CONTENT_CHARS, derive_title, embed_text, index_text, index_body
 
 DATASET_NAME = "Tobi-Bueck/customer-support-tickets"
+# Eval holdout (evaluation-design.md §2): these tickets must never be indexed, or the agent
+# would retrieve an eval ticket's own historical answer.
+HOLDOUT_PATH = Path(__file__).resolve().parents[2] / "evals" / "examples.jsonl"
+
+
+def _holdout_ids() -> set[str]:
+    if not HOLDOUT_PATH.exists():
+        return set()
+    lines = HOLDOUT_PATH.read_text(encoding="utf-8").splitlines()
+    return {json.loads(line)["example_id"] for line in lines if line.strip()}
 
 
 def _snapshot_path() -> Path:
@@ -77,3 +88,10 @@ def load_english_subset(limit: int | None = None, rebuild: bool = False) -> pd.D
     if limit:
         df = df.sample(min(limit, len(df)), random_state=0).sort_values("hf_row").reset_index(drop=True)
     return df
+
+
+def load_ingest_subset(limit: int | None = None, rebuild: bool = False) -> pd.DataFrame:
+    """`load_english_subset` minus the eval holdout. Filtered *after* the `--limit` sample,
+    so adding a holdout never changes which rows a given `--limit` ingests."""
+    df = load_english_subset(limit=limit, rebuild=rebuild)
+    return df[~df["case_id"].isin(_holdout_ids())].reset_index(drop=True)

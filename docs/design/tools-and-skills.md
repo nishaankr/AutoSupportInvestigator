@@ -25,23 +25,20 @@ call becomes `{"error": ...}` with `ToolCallRecord.ok = false` rather than crash
 
 | Node | Tools bound | Skill(s) loaded |
 |---|---|---|
-| `triage` | — | `triage.md` (fixed) |
-| `investigate` | all five, via `build_tools(customer_id, ticket_id)` | `investigation.md` (fixed) + `escalation.md` when `triage` put `"escalation"` in `active_skills` |
+| `investigate` | all five, via `build_tools(customer_id, ticket_id)`, plus `submit_findings` (ends the round; its arguments are the `Findings` schema, D19) | `investigation.md` (fixed) + `escalation.md` when `triage` put `"escalation"` in `active_skills` |
 | `resolve` | — | `customer_response.md` (fixed) |
-| `escalate` (CP5) | — | `escalation.md` (fixed) |
 
-`active_skills` is the only *dynamic* selection: `triage` decides, from the ticket and its
-retrieved neighbours, whether this looks escalation-bound (e.g. a refund, an account/legal
-matter, an outage) and if so adds `"escalation"` — `investigate` then layers that skill's
-guidance on top of its own fixed one. Nothing else is optional; skills are never concatenated
-into one prompt (CLAUDE.md).
+`triage` and `escalate` make no model call since D19 (a label vote and a template), so they
+load no skill; `skills/triage.md` was removed rather than left unused.
+
+`active_skills` is the only *dynamic* selection: `triage` decides by rule, from the ticket and
+its retrieved neighbours, whether this looks escalation-bound (escalation-class answers
+dominate, or a high-stakes term such as a breach, outage or legal matter) and if so adds
+`"escalation"` — `investigate` then layers that skill's guidance on top of its own fixed one.
+Nothing else is optional; skills are never concatenated into one prompt (CLAUDE.md).
 
 ## 3. Skills
 
-- **`triage.md`** — classify `queue`/`type`/`priority`/`tags` from the ticket, the retrieved
-  neighbours' metadata and any customer profile; write one or two sentences of rationale a
-  human reviewer can check; decide whether the `escalation` skill should also be active for
-  this ticket's investigation.
 - **`investigation.md`** — the ReAct loop's operating instructions: form a hypothesis, use the
   five tools to gather and check evidence (not guess), prefer `resolution`-class cases as
   grounding, and stop calling tools once the evidence is enough to state a hypothesis with

@@ -1,4 +1,5 @@
-"""Node 11: `resolve` (graph-design.md) — main tier, drafts a grounded resolution.
+"""Node 11: `resolve` (graph-design.md) — fast tier (decisions.md D19), drafts a grounded
+resolution. The one model call a resolved ticket makes after `investigate`.
 
 `investigate` produces `evidence` (output-schema.md §3.2); `resolve` only drafts prose
 against it (decisions.md D13 Q2). It is reached only when `assess_evidence` judged the
@@ -17,7 +18,7 @@ from pydantic import BaseModel
 from autosupport.graph.evidence import evidence_context
 from autosupport.graph.memory import profile_block
 from autosupport.graph.state import AgentState, DraftResponse
-from autosupport.llm import main_llm
+from autosupport.llm import fast_llm, structured
 from autosupport.skills import load_skill
 from autosupport.store import db as store_db
 
@@ -56,7 +57,7 @@ def resolve(state: AgentState) -> dict:
         f"priority={classification.priority}\n\nCustomer memory:\n{memory}\n\n{extra}"
         f"Evidence gathered during investigation:\n\n{evidence_block}"
     )
-    output: DraftOutput = main_llm().with_structured_output(DraftOutput, method="json_schema").invoke(
+    output: DraftOutput = structured(fast_llm(), DraftOutput).invoke(
         [("system", load_skill("customer_response")), ("user", user_prompt)]
     )
     draft = DraftResponse(analysis=output.analysis, resolution=output.resolution, escalation=None)

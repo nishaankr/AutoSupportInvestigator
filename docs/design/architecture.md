@@ -197,7 +197,7 @@ AutoSupport/
 ├── .gitignore                    # .env, data/, __pycache__, .venv
 ├── README.md
 ├── docs/                         # these design docs
-├── skills/                       # triage.md, investigation.md, escalation.md, customer_response.md, ...
+├── skills/                       # investigation.md, escalation.md, customer_response.md
 ├── autosupport/
 │   ├── cli.py                    # Typer commands
 │   ├── service.py                # new_ticket / resume / show — the only thing the CLI calls

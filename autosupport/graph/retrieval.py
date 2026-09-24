@@ -17,6 +17,13 @@ from autosupport.rag.embedder import embed
 from autosupport.rag.queries import SearchResult
 
 
+# Prompt budget (decisions.md D18): the LLM sees short snippets of the top cases and fetches a
+# full record with `get_ticket_by_id` only when it needs one (small-to-big, D7). State keeps the
+# longer `SNIPPET_CHARS` snippets; only what is rendered into prompts is cut.
+PROMPT_CASES = 12
+PROMPT_SNIPPET_CHARS = 300
+
+
 def ticket_text(ticket: TicketInput) -> str:
     return ticket_query_text(ticket.subject, ticket.body)
 

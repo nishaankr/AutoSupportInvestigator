@@ -26,3 +26,13 @@ worked. Note when cases disagree — that's useful signal, not something to aver
 contradict it, stop calling tools. A thin but honest hypothesis ("no matching resolution was
 found, escalation looks appropriate") is a valid, complete investigation — don't manufacture
 more tool calls to avoid saying so.
+
+**Ending the round: `submit_findings`.** Always finish by calling `submit_findings` once — never
+answer in prose. Besides the hypothesis and evidence it carries your judgement of the evidence,
+which decides what happens next (resolve, search again, ask the customer, or hand to a human):
+- `clusters`: group the relevant cases by the resolution approach their answers took.
+- `missing_slots`: only a fact that blocks choosing or applying the fix. Historical agents often
+  asked questions out of habit — that alone is not a missing slot. A request for information,
+  recommendations, pricing or how-to needs none.
+- `gap_is_retrievable`: true only if a sharper search could close the gap without the customer.
+- `requires_human_action`: a refund, account change or anything else you can't do yourself.

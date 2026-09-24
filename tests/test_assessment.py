@@ -63,9 +63,22 @@ def test_conflicting_when_two_multi_case_clusters_split_the_weight():
                    SUPPORT) == "conflicting"
 
 
-def test_conflicting_when_neighbours_disagree_on_queue():
+def test_noisy_queue_labels_no_longer_make_a_conflict():
+    # D21: the dataset's queue labels disagree on the same problem; that isn't competing fixes.
     rel = [case("HF-1", queue="a"), case("HF-2", queue="b"), case("HF-3", queue="c")]
-    assert verdict(rel, [cluster("HF-1", "HF-2", "HF-3")], SUPPORT) == "conflicting"
+    assert verdict(rel, [cluster("HF-1", "HF-2", "HF-3")], SUPPORT) == "sufficient"
+
+
+def test_non_fix_clusters_do_not_compete_but_two_fixes_do():
+    rel = [case("HF-1"), case("HF-2"), case("HF-3"), case("HF-4", ans="clarification_request"),
+           case("HF-5", ans="clarification_request"), case("HF-6", ans="escalation"), case("HF-7", ans="escalation")]
+    asked = [cluster("HF-1", "HF-2", "HF-3"), cluster("HF-4", "HF-5", label="ask"), cluster("HF-6", "HF-7", label="esc")]
+    assert verdict(rel, asked, SUPPORT) == "sufficient"  # one fix; the rest are non-answers
+    rival = [case("HF-1"), case("HF-2"), case("HF-3"), case("HF-4")]
+    assert verdict(rival, [cluster("HF-1", "HF-2"), cluster("HF-3", "HF-4", label="other fix")],
+                   SUPPORT) == "conflicting"  # 50/50 between two fixes
+    assert verdict(rel[3:], [cluster("HF-4", "HF-5"), cluster("HF-6", "HF-7")],
+                   [ev("HF-4"), ev("HF-5")]) == "insufficient"  # no cluster proposes a fix
 
 
 def test_conflicting_when_customer_history_contradicts():
@@ -132,7 +145,6 @@ def test_variants_v3_always_v2_when_few_resolution_cases_and_capped_at_three(mon
     from autosupport.graph.nodes import refine_retrieval as r
     from autosupport.graph.state import ClarificationTurn
 
-    monkeypatch.setattr(r, "_rewrite", lambda s, a: r.QueryRewrite(text="rw", keywords=["k"]))
     labels = lambda st: [v["label"] for v in select_variants(st, {}, "ticket")]  # noqa: E731
     assert labels(_state()) == ["hypothesis_rewrite"]  # 2 resolution cases held -> no V2
     assert labels(_state(retrieved_cases=[case("HF-1", ans="escalation")])) == ["resolution_only", "hypothesis_rewrite"]
@@ -141,6 +153,18 @@ def test_variants_v3_always_v2_when_few_resolution_cases_and_capped_at_three(mon
     assert labels(st) == ["clarification_keywords", "resolution_only", "hypothesis_rewrite"]  # V4 cut by the cap
     v1 = select_variants(st, {}, "ticket")[0]
     assert "TS-453D" in v1["phrases"] or "QNAP" in v1["phrases"]
+
+
+def test_v3_query_is_built_from_the_hypothesis_without_a_model():
+    from autosupport.graph.nodes.refine_retrieval import hypothesis_query
+    from autosupport.graph.state import Hypothesis
+
+    assert hypothesis_query({}, "ticket") == ("ticket", [])  # no hypothesis yet: the ticket itself
+    st = {"hypothesis": Hypothesis(statement="SMB2 disabled after QNAP QTS 5.1 update", root_cause_category="config",
+                                   supporting_case_ids=[]),
+          "evidence": [ev("HF-1")]}
+    text, keywords = hypothesis_query(st, "ticket")
+    assert text.startswith("config: SMB2 disabled") and {"SMB2", "QNAP", "QTS"} <= set(keywords)
 
 
 def test_grounding_rules_g1_g2_g3():
@@ -162,3 +186,36 @@ def test_grounding_rules_g1_g2_g3():
     handoff = DraftResponse(analysis="a", resolution="r", escalation=EscalationDraft(
         target_queue="q", reason="r", handoff_summary="see [HF-7]"))
     assert any("HF-7" in i for i in grounding_issues(handoff, [], "escalate"))
+
+
+def test_a_matched_rule_escalates_before_refining_or_asking():
+    # CP7 eval: rule-hit tickets were asking the customer instead of handing off (D18).
+    assert A.next_action_for(verdict="insufficient", rule_hit="action_beyond_agent", gap_is_retrievable=True,
+                             missing_slots=["error text"], retrieval_round=1, clarification_count=0,
+                             max_retrieval_rounds=3, max_clarifications=2) == "escalate"
+
+
+def test_investigate_context_shows_top_graph_cases_with_short_snippets():
+    from autosupport.graph.nodes.investigate import _context_block
+    from autosupport.graph.retrieval import PROMPT_CASES, PROMPT_SNIPPET_CHARS
+    from autosupport.graph.state import Classification, RetrievedCase, TicketInput
+
+    def case(i, label):
+        return RetrievedCase(case_id=f"HF-{i}", source="dataset", subject="s", body_snippet="b" * 600,
+                             answer_snippet="a" * 600, score=0.1, similarity=0.9 - i / 1000,
+                             retrieval_round=1, query_label=label)
+    state = {"ticket": TicketInput(subject="s", body="b"),
+             "classification": Classification(queue="q", type="t", priority="low", tags=[], rationale="r",
+                                              neighbor_agreement=1.0),
+             "retrieved_cases": [case(0, "tool:search_similar_tickets")] + [case(i, "initial") for i in range(1, 20)]}
+    block = _context_block(state)
+    assert "[HF-0]" not in block  # tool hits live in their tool result, not the cached system block
+    assert block.count("[HF-") == PROMPT_CASES
+    assert "b" * (PROMPT_SNIPPET_CHARS + 1) not in block
+
+
+def test_askable_slots_drop_secrets_and_cap_at_two():
+    # D20: a live run asked the customer for their S3 access key and secret key.
+    slots = ["Exact error message", "S3 credentials (access key/secret key)", "Bucket region", "Bucket policy"]
+    assert A.askable_slots(slots) == ["Exact error message", "Bucket region"]
+    assert A.askable_slots(["Your password", "API token"]) == []

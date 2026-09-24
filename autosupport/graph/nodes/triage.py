@@ -1,83 +1,86 @@
-"""Node 4: `triage` (graph-design.md, output-schema.md §2 "model" author for
-`Classification`) — fast tier, structured output.
+"""Node 4: `triage` (graph-design.md) — pure Python, no model call (decisions.md D19).
 
-`neighbor_agreement` is a corpus fact (the modal queue's share among the initial retrieval),
-so code computes it rather than asking the model for it (output-schema.md D2 "the model
-can't inflate a number it never writes"; F3 in the CP3 plan) — `TriageOutput` below
-deliberately omits it.
+The retrieved neighbours already carry the dataset's own queue/type/priority/tag labels, so
+classification is a vote over them, weighted by similarity and by how many historical tickets
+each canonical stands for (`cluster_size`, the same weight confidence uses). A model reading
+the same neighbours added a call per ticket and nothing a weighted vote doesn't; the offline
+`classification_accuracy` evaluator scores this vote against held-out labels.
 
-`active_skills` is written by the model from CP4 on (F6 in the CP3 plan is resolved): the
-prompt is `skills/triage.md`, not a module constant, so the "removing a skill file changes
-behaviour" test (checkpoints.md CP4) applies to `triage` too, not just `investigate`.
+`active_skills` (tools-and-skills.md §2) is a rule too: the `escalation` skill joins the
+investigation when escalation-class answers dominate the neighbours or the ticket touches a
+high-stakes area.
 """
 
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, defaultdict
 
-from pydantic import BaseModel, Field
-
-from autosupport.graph.memory import profile_block
-from autosupport.graph.state import AgentState, Classification, Priority, RetrievedCase
-from autosupport.llm import fast_llm
-from autosupport.skills import load_skill
+from autosupport.graph.assessment import HIGH_STAKES
+from autosupport.graph.confidence import cluster_weight
+from autosupport.graph.state import AgentState, Classification, RetrievedCase
 from autosupport.store import cases as cases_repo
 from autosupport.store import db as store_db
 
-# The only optional skill triage can activate at CP4 (tools-and-skills.md §2) — validated
-# against this set rather than trusted verbatim, since a model-invented name would otherwise
-# crash `load_skill` inside `investigate` instead of failing here, at the boundary.
-_KNOWN_OPTIONAL_SKILLS = {"escalation"}
+VOTE_NEIGHBOURS = 10
+TAG_SHARE_FLOOR = 0.3
+MAX_TAGS = 5
+ESCALATION_SKILL_SHARE = 0.4
+_PRIORITY_ORDER = ("low", "medium", "high", "critical")
 
 
-class TriageOutput(BaseModel):
-    queue: str
-    type: str
-    priority: Priority
-    tags: list[str] = Field(default_factory=list)
-    rationale: str
-    active_skills: list[str] = Field(default_factory=list)
+def _weight(case: RetrievedCase) -> float:
+    return case.similarity * cluster_weight(case.cluster_size)
+
+
+def vote(cases: list[RetrievedCase], field: str) -> tuple[str | None, float]:
+    """Weighted modal value of `field` and its share of the total weight."""
+    totals: dict[str, float] = defaultdict(float)
+    for c in cases:
+        if getattr(c, field):
+            totals[getattr(c, field)] += _weight(c)
+    if not totals:
+        return None, 0.0
+    winner = max(totals, key=totals.get)
+    return winner, totals[winner] / sum(totals.values())
+
+
+def classify(ticket, cases: list[RetrievedCase]) -> tuple[Classification, list[str]]:
+    neighbours = cases[:VOTE_NEIGHBOURS]
+    queue, q_share = vote(neighbours, "queue")
+    type_, t_share = vote(neighbours, "type")
+    priority, p_share = vote(neighbours, "priority")
+    # A customer can raise the priority they report, never have it lowered below the vote.
+    if ticket.customer_priority and _PRIORITY_ORDER.index(ticket.customer_priority) > _PRIORITY_ORDER.index(priority or "low"):
+        priority = ticket.customer_priority
+
+    total = sum(_weight(c) for c in neighbours) or 1.0
+    tag_weight: dict[str, float] = defaultdict(float)
+    for c in neighbours:
+        for tag in c.tags:
+            tag_weight[tag] += _weight(c)
+    tags = [t for t, w in sorted(tag_weight.items(), key=lambda kv: -kv[1]) if w / total >= TAG_SHARE_FLOOR][:MAX_TAGS]
+    tags = list(dict.fromkeys([*ticket.customer_tags, *tags]))
+
+    classification = Classification(
+        queue=queue or "General Inquiry", type=type_ or "Request", priority=priority or "medium", tags=tags,
+        rationale=(f"Weighted vote of the {len(neighbours)} nearest historical cases: queue {queue} ({q_share:.0%}), "
+                   f"type {type_} ({t_share:.0%}), priority {priority} ({p_share:.0%})."),
+        neighbor_agreement=_neighbor_agreement(cases),
+    )
+
+    escalation_share = sum(_weight(c) for c in neighbours if c.answer_class == "escalation") / total
+    text = f"{ticket.subject} {ticket.body} {' '.join(tags)}".lower()
+    skills = ["escalation"] if escalation_share >= ESCALATION_SKILL_SHARE or any(k in text for k in HIGH_STAKES) else []
+    return classification, skills
 
 
 def triage(state: AgentState) -> dict:
-    ticket = state["ticket"]
-    retrieved = state.get("retrieved_cases", [])
-    profile = state.get("customer_profile")
-
-    neighbour_block = "\n".join(
-        f"- {c.case_id}: queue={c.queue}, type={c.type}, priority={c.priority}, similarity={c.similarity:.2f}"
-        for c in retrieved[:10]
-    ) or "(no retrieved neighbours)"
-    user_prompt = (
-        f"Subject: {ticket.subject}\n\nBody: {ticket.body}\n\n"
-        f"Customer-supplied priority: {ticket.customer_priority or '(none)'}\n"
-        f"Customer-supplied tags: {ticket.customer_tags or '(none)'}\n\n"
-        f"Customer memory:\n{profile_block(profile, state.get('customer_history', []))}\n\n"
-        f"Retrieved neighbours:\n{neighbour_block}"
-    )
-
-    # method="json_schema": see decisions.md D13 for why the default ("function_calling",
-    # forced tool choice) isn't reliable for these two models.
-    output: TriageOutput = fast_llm().with_structured_output(TriageOutput, method="json_schema").invoke(
-        [("system", load_skill("triage")), ("user", user_prompt)]
-    )
-
-    classification = Classification(
-        queue=output.queue,
-        type=output.type,
-        priority=output.priority,
-        tags=output.tags,
-        rationale=output.rationale,
-        neighbor_agreement=_neighbor_agreement(retrieved),
-    )
-
+    classification, active_skills = classify(state["ticket"], state.get("retrieved_cases", []))
     conn = store_db.connect()
     try:
         cases_repo.set_classification(conn, state["ticket_id"], classification, status="investigating")
     finally:
         conn.close()
-
-    active_skills = [s for s in output.active_skills if s in _KNOWN_OPTIONAL_SKILLS]
     return {"classification": classification, "active_skills": active_skills, "status": "investigating"}
 
 

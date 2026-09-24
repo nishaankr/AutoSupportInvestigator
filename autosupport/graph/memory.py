@@ -29,6 +29,25 @@ _SENSITIVE = re.compile(
 )
 
 
+# The gate in front of the extraction call (D19): each alternative is the surface form of
+# something W2 can keep — a version number, an OS, a deployment/plan word, a tried fix or a
+# stated preference. No match means nothing W1-W3 could admit, so the model isn't called.
+# Product names alone don't open the gate (almost every ticket names one); they are still
+# kept whenever another candidate brings the ticket to the model.
+_CANDIDATE = re.compile(
+    r"\b\d+(?:\.\d+)+\b"
+    r"|\b(?:windows|macos|mac ?os|ubuntu|linux|debian|centos|red ?hat|ios|android|chrome ?os)\b"
+    r"|\b(?:aws|azure|gcp|kubernetes|docker|on-?prem(?:ise)?|self-?hosted|cloud|enterprise|premium|plan|subscription)\b"
+    r"|\b(?:already|tried|restart(?:ed)?|reinstall(?:ed)?|reboot(?:ed)?|cleared|didn'?t work|did not work|still)\b"
+    r"|\b(?:prefer|by (?:e-?mail|phone)|not comfortable|in (?:english|german|french|spanish))\b",
+    re.I,
+)
+
+
+def has_memory_candidates(source_text: str) -> bool:
+    return bool(_CANDIDATE.search(source_text))
+
+
 class RememberedFact(BaseModel):
     key: FactKey
     value: str

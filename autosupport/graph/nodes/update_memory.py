@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from autosupport.graph.memory import REPEAT_UNRESOLVED_DAYS, MemoryUpdate, apply_update, customer_text
+from autosupport.graph.memory import (
+    REPEAT_UNRESOLVED_DAYS, MemoryUpdate, apply_update, customer_text, has_memory_candidates,
+)
 from autosupport.graph.state import AgentState
-from autosupport.llm import fast_llm
+from autosupport.llm import fast_llm, structured
 from autosupport.store import cases as cases_repo
 from autosupport.store import customers as customers_repo
 from autosupport.store import db as store_db
@@ -48,10 +50,13 @@ def update_memory(state: AgentState) -> dict:
             + (f"\nEscalated because: {result.escalation.reason}" if result.escalation.required else "")
         )
         current = profile.model_dump(exclude={"provenance", "customer_id"}) if profile else "(empty)"
-        update: MemoryUpdate = fast_llm().with_structured_output(MemoryUpdate, method="json_schema").invoke([
-            ("system", SYSTEM),
-            ("user", f"CUSTOMER'S OWN TEXT:\n{source}\n\n{outcome}\n\nCurrent profile: {current}"),
-        ])
+        if has_memory_candidates(source):
+            update: MemoryUpdate = structured(fast_llm(), MemoryUpdate).invoke([
+                ("system", SYSTEM),
+                ("user", f"CUSTOMER'S OWN TEXT:\n{source}\n\n{outcome}\n\nCurrent profile: {current}"),
+            ])
+        else:  # nothing W1-W3 could keep: skip the call, still recompute flags (W6)
+            update = MemoryUpdate(reasoning="skipped: no candidate facts in the customer's text")
         since = datetime.now(timezone.utc) - timedelta(days=REPEAT_UNRESOLVED_DAYS)
         memory = apply_update(
             profile, state["customer_id"], update, source, state["ticket_id"],

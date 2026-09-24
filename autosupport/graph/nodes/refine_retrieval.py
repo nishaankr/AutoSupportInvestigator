@@ -15,30 +15,18 @@ from __future__ import annotations
 
 
 from langgraph.types import Command, Send
-from pydantic import BaseModel, Field
 
 from autosupport.graph import assessment as logic
 from autosupport.graph.retrieval import reanchor, ticket_text, to_retrieved
 from autosupport.graph.runconfig import run_setting
 from autosupport.graph.state import AgentState, RetrievalQuery
 from autosupport.ingest.text import ENTITY
-from autosupport.llm import fast_llm
 from autosupport.rag import queries as rag_queries
 
 MAX_VARIANTS = 3
 VARIANT_K = 8
 _MIN_RESOLUTION_CASES = 2
-
-_REWRITE_PROMPT = """You rewrite a search query for a corpus of historical support tickets.
-Given the ticket and the current investigation hypothesis, write `text`: a short query in the
-vocabulary a *historical ticket about this exact problem* would use (product, component,
-symptom) — not the customer's literal wording. `keywords`: up to 6 distinctive terms (product
-names, error strings, components) that a matching ticket must contain."""
-
-
-class QueryRewrite(BaseModel):
-    text: str
-    keywords: list[str] = Field(default_factory=list, max_length=6)
+_MAX_KEYWORDS = 6
 
 
 def refine_retrieval(state: AgentState, config) -> Command:
@@ -71,9 +59,8 @@ def select_variants(state: AgentState, config, anchor: str) -> list[dict]:
         variants.append({"label": "resolution_only", "text": anchor,
                          "where": {"answer_class": "resolution"}, "phrases": []})
 
-    rewrite = _rewrite(state, anchor)  # V3: always
-    variants.append({"label": "hypothesis_rewrite", "text": rewrite.text,
-                     "where": None, "phrases": rewrite.keywords})
+    text, keywords = hypothesis_query(state, anchor)  # V3: always
+    variants.append({"label": "hypothesis_rewrite", "text": text, "where": None, "phrases": keywords})
 
     modal_queue = _modal_queue(relevant)
     if logic.top_queue_share(relevant) < logic.QUEUE_AGREEMENT_FLOOR or (
@@ -90,16 +77,18 @@ def _modal_queue(relevant) -> str | None:
     return max(set(queues), key=queues.count) if queues else None
 
 
-def _rewrite(state: AgentState, anchor: str) -> QueryRewrite:
-    hypothesis, assessment = state.get("hypothesis"), state.get("evidence_assessment")
-    user = (
-        f"Ticket: {anchor}\nHypothesis: {hypothesis.statement if hypothesis else '(none yet)'}\n"
-        f"Gap to close: {assessment.reason if assessment else '(none stated)'}\n"
-        f"Missing facts: {assessment.missing_slots if assessment else []}"
-    )
-    return fast_llm().with_structured_output(QueryRewrite, method="json_schema").invoke(
-        [("system", _REWRITE_PROMPT), ("user", user)]
-    )
+def hypothesis_query(state: AgentState, anchor: str) -> tuple[str, list[str]]:
+    """V3 in Python (decisions.md D19): the hypothesis already states the problem in the
+    investigator's terms, so it *is* the rewritten query; its entities (products, versions,
+    components — the same `ENTITY` pattern the clustering guard uses) plus the evidence
+    summaries' become the forced BM25 phrases. No model call."""
+    hypothesis = state.get("hypothesis")
+    if hypothesis is None:
+        return anchor, []
+    text = f"{hypothesis.root_cause_category}: {hypothesis.statement}"
+    sources = [hypothesis.statement, *(e.summary for e in state.get("evidence", []))]
+    keywords = list(dict.fromkeys(m for s in sources for m in ENTITY.findall(s)))[:_MAX_KEYWORDS]
+    return text, keywords
 
 
 def retrieve_variant(payload: dict) -> dict:

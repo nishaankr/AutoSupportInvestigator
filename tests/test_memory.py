@@ -62,3 +62,12 @@ def test_w6_repeat_unresolved_is_computed_and_clears():
     assert flagged.flags == ["repeat_unresolved"]
     cleared = _apply(MemoryUpdate(reasoning="r"), profile=flagged, escalations=1)
     assert cleared.flags == []
+
+
+def test_gate_only_calls_the_model_when_the_customer_text_has_a_candidate():
+    from autosupport.graph.memory import has_memory_candidates
+
+    assert has_memory_candidates("We run DSM 7.2 on our NAS")          # version
+    assert has_memory_candidates("I already restarted the router")     # tried fix
+    assert has_memory_candidates("Please reply by email")              # preference
+    assert not has_memory_candidates("How do I export a report to PDF?")

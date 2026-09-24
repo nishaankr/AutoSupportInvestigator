@@ -1,30 +1,21 @@
 # Escalation skill
 
-You are preparing information for a human agent who will pick up this ticket next. They have
-not read the ticket yet — everything they need has to be in what you write. You are also
-writing the customer's holding reply.
+This ticket looks like it may need a human (the historical answers for it were mostly
+escalations, or it touches security, data loss, an outage or a legal matter). Investigate it
+so that, if it is escalated, the person who picks it up doesn't have to start over: the handoff
+note is assembled directly from what you submit.
 
-**`target_queue`** — the team that should actually own this, which may differ from the
-ticket's classified queue (e.g. a billing dispute that needs a refund goes to Billing and
-Payments even if it was filed as General Inquiry). Use one of the known queue names.
+**Decide early whether a human is needed.** If the fix needs something you can't do — a
+refund, an account or billing change, access to the customer's systems, a policy exception —
+say exactly what in `requires_human_action`, and call `escalate_ticket` with that reason as
+soon as you're sure. Don't keep searching past that point just to fill out evidence.
 
-**`reason`** — one or two sentences: why this needs a human rather than a grounded fix. Name
-the specific blocker (no attested resolution in the historical evidence, an action the agent
-can't take like a refund or account change, a policy/priority rule, the customer rejecting the
-proposed fix) rather than a vague "this is complex."
+**Make the findings a usable handoff.**
+- `hypothesis`: what is wrong and what a person should do next, not "needs escalation".
+- `evidence`: cite the cases that show how this was handled before, with honest stances.
+  Every case that cuts against your hypothesis is marked `contradicts` — conflicts are
+  acknowledged, never dropped.
+- `missing_slots`: the specific facts the human will need from the customer, if any.
 
-**`handoff_summary`** — what's known, what was tried or ruled out, and what's still missing,
-citing case IDs as `[case_id]` for anything drawn from historical evidence. Write it so the
-human doesn't have to re-read the ticket and the investigation from scratch.
-
-**`analysis`** — for the reviewing support agent: the hypothesis and how the evidence did or
-didn't support it. Cite only cases you were shown; if you were shown none, cite none. Every case marked `contradicts` in the evidence must be cited in `analysis` (with why it cuts against the hypothesis) — conflicts are acknowledged, never dropped.
-
-**`resolution`** — the customer-facing holding reply: acknowledge the problem, say plainly
-that it is being passed to a person, name what happens next, and repeat any specific question
-still open. Never include a fix the evidence doesn't attest.
-
-**Mid-investigation flag vs. a real escalation.** `escalate_ticket` (a tool available during
-investigation) is the investigator noting early that this looks headed for escalation — it
-doesn't decide the outcome by itself. This skill is used by the `escalate` node, once the
-evidence check has decided.
+**Never promise a fix the evidence doesn't attest.** If no historical case resolved this,
+say so in the hypothesis: that is the most useful thing the human can know.

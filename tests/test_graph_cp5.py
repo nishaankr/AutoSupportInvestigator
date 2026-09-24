@@ -18,16 +18,13 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
 from autosupport.graph.build import _allowed_msgpack_modules, build_graph
-from autosupport.graph.nodes import assess_evidence as assess_node
-from autosupport.graph.nodes import escalate as escalate_node
 from autosupport.graph.nodes import investigate as investigate_node
 from autosupport.graph.nodes import refine_retrieval as refine_node
 from autosupport.graph.nodes import resolve as resolve_node
-from autosupport.graph.nodes import triage as triage_node
 from autosupport.graph.nodes import update_memory as memory_node
 from autosupport.graph.memory import MemoryUpdate, RememberedFact
 from autosupport.graph.nodes import verify as verify_node
-from autosupport.graph.state import ApproachCluster, EvidenceItem, TicketInput
+from autosupport.graph.state import ApproachCluster, EvidenceItem, Findings, TicketInput
 from autosupport.ingest import agent_index
 from autosupport.rag.queries import SearchResult
 from autosupport.store import db as store_db
@@ -37,13 +34,14 @@ CASE_IDS = ["HF-1", "HF-2", "HF-3"]
 
 class _Fake:
     """One fake for every LLM tier: structured outputs dispatch by schema name (a value, or a
-    list consumed in order with the last repeating); `bind_tools(...).invoke(...)` returns an
-    AIMessage requesting `tool_calls_per_turn` real `compute_queue_stats` calls."""
+    list consumed in order with the last repeating). `bind_tools(...).invoke(...)` returns an
+    AIMessage requesting `tool_calls_per_turn` real `compute_queue_stats` calls, or — when that
+    is 0 or `submit_findings` is forced — a `submit_findings` call carrying `findings`."""
 
     _ids = itertools.count()
 
-    def __init__(self, outputs: dict, tool_calls_per_turn: int = 0):
-        self._outputs, self._n = outputs, tool_calls_per_turn
+    def __init__(self, outputs: dict, tool_calls_per_turn: int = 0, findings=None):
+        self._outputs, self._n, self._findings = outputs, tool_calls_per_turn, findings
 
     def with_structured_output(self, schema, **_):
         value = self._outputs[schema.__name__]
@@ -51,11 +49,12 @@ class _Fake:
             value = value.pop(0) if len(value) > 1 else value[0]
         return type("S", (), {"invoke": lambda _self, _m: value})()
 
-    def bind_tools(self, _tools):
-        n = self._n
-        return type("B", (), {"invoke": lambda _self, _m: AIMessage(content="", tool_calls=[
-            {"name": "compute_queue_stats", "args": {}, "id": f"call_{next(_Fake._ids)}"} for _ in range(n)
-        ])})()
+    def bind_tools(self, _tools, tool_choice=None):
+        submit = tool_choice == "submit_findings" or self._n == 0
+        calls = [{"name": "submit_findings", "args": self._findings.model_dump(), "id": f"call_{next(_Fake._ids)}"}] \
+            if submit else [{"name": "compute_queue_stats", "args": {}, "id": f"call_{next(_Fake._ids)}"}
+                            for _ in range(self._n)]
+        return type("B", (), {"invoke": lambda _self, _m, **_k: AIMessage(content="", tool_calls=calls)})()
 
 
 def _hits(_text, k=10, where=None, conn=None, phrases=()):
@@ -92,28 +91,19 @@ def env(tmp_path, monkeypatch):
 
 
 def _wire(monkeypatch, *, sufficient: bool, verify_fails: bool, tools_per_turn: int = 0):
-    triage = triage_node.TriageOutput(queue="Technical Support", type="Incident", priority="high",
-                                      tags=["nas"], rationale="r")
-    conclusion = investigate_node.InvestigateConclusion(
+    # triage, assess_evidence, refine_retrieval and escalate make no model calls (D19).
+    findings = Findings(
         hypothesis="SMB2 disabled", root_cause_category="config", supporting_case_ids=CASE_IDS,
         evidence=[EvidenceItem(case_id=c, summary="re-enable SMB2", stance="supports") for c in CASE_IDS]
-        if sufficient else [])
-    judgement = assess_node.EvidenceJudgement(
+        if sufficient else [],
         clusters=[ApproachCluster(label="reenable smb2", case_ids=CASE_IDS)] if sufficient else [],
         missing_slots=[] if sufficient else ["firmware version"], gap_is_retrievable=not sufficient,
         clarification_question=None if sufficient else "Which firmware version are you on?", reason="r")
     draft = resolve_node.DraftOutput(analysis="Matches [HF-1][HF-2][HF-3].", resolution="Re-enable SMB2 [HF-1].")
-    escalated = escalate_node.EscalateOutput(
-        target_queue="Technical Support", reason="No grounded fix.", handoff_summary="Nothing attested.",
-        analysis="No supporting evidence.", resolution="A person will follow up.")
     verdict = verify_node.VerificationJudgement(
         unsupported_claims=["invented step"] if verify_fails else [], recommended_action="re_reason")
-    monkeypatch.setattr(triage_node, "fast_llm", lambda: _Fake({"TriageOutput": triage}))
-    monkeypatch.setattr(investigate_node, "main_llm", lambda: _Fake({"InvestigateConclusion": conclusion}, tools_per_turn))
-    monkeypatch.setattr(assess_node, "fast_llm", lambda: _Fake({"EvidenceJudgement": judgement}))
-    monkeypatch.setattr(refine_node, "fast_llm", lambda: _Fake({"QueryRewrite": refine_node.QueryRewrite(text="smb", keywords=["smb"])}))
-    monkeypatch.setattr(resolve_node, "main_llm", lambda: _Fake({"DraftOutput": draft}))
-    monkeypatch.setattr(escalate_node, "main_llm", lambda: _Fake({"EscalateOutput": escalated}))
+    monkeypatch.setattr(investigate_node, "main_llm", lambda: _Fake({}, tools_per_turn, findings))
+    monkeypatch.setattr(resolve_node, "fast_llm", lambda: _Fake({"DraftOutput": draft}))
     monkeypatch.setattr(verify_node, "fast_llm", lambda: _Fake({"VerificationJudgement": verdict}))
     memory = MemoryUpdate(facts=[RememberedFact(key="product", value="NAS", quote="NAS shares gone")], reasoning="r")
     monkeypatch.setattr(memory_node, "fast_llm", lambda: _Fake({"MemoryUpdate": memory}))
@@ -132,7 +122,7 @@ def _config(tid, **limits):
 
 def _start(graph, cfg, tid="T-20260924-abcdef"):
     graph.invoke({"ticket_id": tid, "customer_id": "C-1",
-                  "ticket": TicketInput(subject="NAS shares gone", body="shares vanished after update")}, cfg)
+                  "ticket": TicketInput(subject="NAS shares gone", body="shares vanished after update, already restarted the NAS")}, cfg)
 
 
 def test_happy_path_pauses_at_confirmation_then_accepts(env, monkeypatch):
@@ -180,9 +170,11 @@ def test_rejection_loops_to_a_new_draft_then_exhausts_to_escalation(env, monkeyp
 
 
 def test_every_loop_exhausts_to_escalation_with_counters_at_limits(env, monkeypatch):
-    """Insufficient evidence + a fixable-looking gap forever, tools every turn, a verifier that
-    never passes: retrieval (B), clarification (C), tool (A) and verify (D) loops all run to
-    their limits and the run still terminates in `escalate`."""
+    """Insufficient evidence + a fixable-looking gap forever, tools every turn: retrieval (B),
+    clarification (C) and tool (A) loops all run to their limits and the run still terminates
+    in `escalate`. The escalation draft is a template (D19), so `verify` checks it with code
+    rules only and it passes first time; loop D's exhaustion is covered by the resolve-path
+    test below."""
     _wire(monkeypatch, sufficient=False, verify_fails=True, tools_per_turn=3)
     graph, cfg = _graph(env), _config("C-1:T-3", max_clarifications=2)
     _start(graph, cfg, "T-20260924-000003")
@@ -197,10 +189,12 @@ def test_every_loop_exhausts_to_escalation_with_counters_at_limits(env, monkeypa
     v = graph.get_state(cfg).values
     result = v["final_output"]
     assert result.status == "escalated" and v["decision"] == "escalate"
-    assert v["retrieval_round"] == 3 and v["clarification_count"] == 2 and v["verify_attempts"] == 2
-    assert result.verification.passed is False and result.verification.unresolved_issues
-    assert result.confidence.cap_reason is not None and result.confidence.band == "low"
+    assert v["retrieval_round"] == 3 and v["clarification_count"] == 2 and v["verify_attempts"] == 1
+    assert result.escalation.trigger == "evidence_exhausted" and result.verification.passed is True
+    assert result.confidence.band == "low"
     assert result.stats.tool_calls > 0
+    # The templated handoff carries what a human needs, citing nothing that wasn't evidence.
+    assert "firmware version" in result.escalation.handoff_summary and "[HF-" not in result.resolution
 
 
 def test_worst_case_fits_one_invocation_under_the_recursion_limit(env, monkeypatch):
@@ -225,3 +219,22 @@ def test_verify_exhaustion_on_a_resolve_draft_escalates_with_verification_failed
     result = graph.get_state(cfg).values["final_output"]
     assert result.status == "escalated" and result.escalation.trigger == "verification_failed"
     assert result.verification.attempts == 3  # two failed resolve drafts + the escalation's own check
+
+
+def test_a_model_that_never_submits_findings_escalates_instead_of_crashing(env, monkeypatch):
+    """D20: GPT-OSS sometimes writes findings as text or calls a tool that wasn't offered, and
+    Groq rejects it (`tool_use_failed`). After the forced attempts the round degrades to
+    "no findings" and the ticket goes to a person."""
+    _wire(monkeypatch, sufficient=True, verify_fails=False)
+
+    class _Failing:
+        def bind_tools(self, _tools, **_):
+            def fail(_self, _m, **_k):
+                raise RuntimeError("Error code: 400 - {'code': 'tool_use_failed'}")
+            return type("B", (), {"invoke": fail})()
+    monkeypatch.setattr(investigate_node, "main_llm", lambda: _Failing())
+    graph, cfg = _graph(env), _config("C-1:T-6")
+    _start(graph, cfg, "T-20260924-000006")
+    result = graph.get_state(cfg).values["final_output"]
+    assert result.status == "escalated" and result.escalation.trigger == "evidence_exhausted"
+    assert any("no valid submit_findings" in e for e in result.errors)

@@ -109,9 +109,12 @@ def _new_ticket_id() -> str:
     return f"T-{datetime.now(timezone.utc):%Y%m%d}-{secrets.token_hex(3)}"
 
 
-def _run_config(thread_id: str) -> dict:
+def _run_config(
+    thread_id: str, ticket_id: str, customer_id: str, require_acceptance: bool | None = None
+) -> dict:
     """Run policy travels in `config["configurable"]` (graph-design.md §9), so a resume uses
-    exactly the limits the ticket started with."""
+    exactly the limits the ticket started with. `metadata` tags every LangSmith trace with
+    the ticket's identity, so a trace (or an eval score) can be found from a ticket id."""
     from autosupport.config import settings
 
     return {
@@ -123,8 +126,9 @@ def _run_config(thread_id: str) -> dict:
             "max_verify_retries": settings.max_verify_retries,
             "max_revisions": settings.max_revisions,
             "tau_rel": settings.tau_rel,
-            "require_acceptance": settings.require_acceptance,
+            "require_acceptance": settings.require_acceptance if require_acceptance is None else require_acceptance,
         },
+        "metadata": {"ticket_id": ticket_id, "customer_id": customer_id, "thread_id": thread_id},
         "recursion_limit": settings.recursion_limit,
     }
 
@@ -149,18 +153,23 @@ def _outcome(ticket_id: str, thread_id: str) -> TicketOutcome:
     )
 
 
-def new_ticket(customer_id: str, subject: str, body: str) -> TicketOutcome:
+def new_ticket(
+    customer_id: str, subject: str, body: str,
+    thread_id: str | None = None, require_acceptance: bool | None = None,
+) -> TicketOutcome:
+    """`thread_id` / `require_acceptance` are overridden only by the offline eval
+    (evaluation-design.md §3: `eval:{run_id}:{example_id}`, no acceptance step)."""
     from autosupport.graph.build import compiled_graph
     from autosupport.graph.state import InputState, TicketInput
 
     ticket_id = _new_ticket_id()
-    thread_id = f"{customer_id}:{ticket_id}"
+    thread_id = thread_id or f"{customer_id}:{ticket_id}"
     input_state: InputState = {
         "ticket_id": ticket_id,
         "customer_id": customer_id,
         "ticket": TicketInput(subject=subject, body=body),
     }
-    compiled_graph().invoke(input_state, _run_config(thread_id))
+    compiled_graph().invoke(input_state, _run_config(thread_id, ticket_id, customer_id, require_acceptance))
     return _outcome(ticket_id, thread_id)
 
 
@@ -203,7 +212,7 @@ def resume_ticket(
     finally:
         conn.close()
 
-    compiled_graph().invoke(Command(resume=resume), _run_config(thread_id))
+    compiled_graph().invoke(Command(resume=resume), _run_config(thread_id, ticket_id, row["customer_id"]))
     return _outcome(ticket_id, thread_id)
 
 
@@ -247,6 +256,44 @@ def memory(customer_id: str) -> MemoryView:
     finally:
         conn.close()
     return MemoryView(customer_id=customer_id, profile=profile, history=history)
+
+
+class EvalRow(BaseModel):
+    example_id: str
+    ticket_id: str | None
+    outcome: str
+    scores: dict[str, float | None]
+    comments: dict[str, str]
+
+
+class EvalSummary(BaseModel):
+    """One offline LangSmith experiment (evaluation-design.md) — not the in-graph `verify`."""
+
+    run_id: str
+    experiment_name: str
+    dataset: str
+    n_examples: int
+    means: dict[str, float | None]
+    rows: list[EvalRow]
+
+
+def run_eval(dataset: str | None = None) -> EvalSummary:
+    from autosupport.config import settings
+    from evals import run as eval_run
+    from evals.dataset import DEFAULT_DATASET
+
+    if settings.langsmith_api_key is None:  # fail fast, before any ticket runs (CLAUDE.md config rule)
+        raise ValueError("LANGSMITH_API_KEY is empty in .env — `autosupport eval` uploads to LangSmith")
+
+    raw = eval_run.run(dataset or DEFAULT_DATASET)
+    rows = [EvalRow(**r) for r in raw["rows"]]
+    keys = sorted({k for r in rows for k in r.scores})
+    means: dict[str, float | None] = {}
+    for key in keys:
+        scored = [r.scores[key] for r in rows if r.scores.get(key) is not None]
+        means[key] = sum(scored) / len(scored) if scored else None
+    return EvalSummary(run_id=raw["run_id"], experiment_name=raw["experiment_name"], dataset=raw["dataset"],
+                       n_examples=raw["n_examples"], means=means, rows=rows)
 
 
 def list_cases(customer_id: str | None = None, awaiting: bool = False) -> list[CaseListItem]:

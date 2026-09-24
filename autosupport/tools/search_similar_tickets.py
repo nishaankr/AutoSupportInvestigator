@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from langchain_core.tools import tool
 
+from autosupport.graph.retrieval import PROMPT_SNIPPET_CHARS
 from autosupport.rag.queries import search
 
 
@@ -21,7 +22,10 @@ def search_similar_tickets(query: str, k: int = 8, queue: str | None = None) -> 
             "case_id": h.case_id, "source": h.source, "subject": h.subject, "queue": h.queue, "type": h.type,
             "priority": h.priority, "answer_class": h.answer_class, "cluster_size": h.cluster_size,
             "similarity": h.similarity, "score": h.score,
-            "body_snippet": h.body_snippet, "answer_snippet": h.answer_snippet, "tags": h.tags,
+            # Short snippets: the result stays in the conversation for every later turn;
+            # `get_ticket_by_id` gives the full record when one case matters (D18).
+            "body_snippet": h.body_snippet[:PROMPT_SNIPPET_CHARS],
+            "answer_snippet": h.answer_snippet[:PROMPT_SNIPPET_CHARS], "tags": h.tags,
         }
         for h in hits
     ]

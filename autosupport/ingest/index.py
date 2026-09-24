@@ -35,7 +35,7 @@ class IngestReport:
 
 
 def _classify_all(records: pd.DataFrame) -> pd.DataFrame:
-    from autosupport.llm import fast_llm
+    from autosupport.llm import fast_llm, structured
 
     records = records.copy()
     records["answer_class"] = records["answer"].map(classify.classify_answer)
@@ -44,7 +44,7 @@ def _classify_all(records: pd.DataFrame) -> pd.DataFrame:
     residue = records.index[records["answer_class"] == "residue"]
     if len(residue):
         # method="json_schema": decisions.md D13 (the default is unreliable for these models)
-        llm = fast_llm().with_structured_output(classify.ResidueClassification, method="json_schema")
+        llm = structured(fast_llm(), classify.ResidueClassification)
         for idx in residue:
             result = classify.classify_residue(records.at[idx, "answer"], llm)
             records.at[idx, "answer_class"] = result.answer_class
@@ -121,7 +121,7 @@ def _upsert_chroma(records: pd.DataFrame, embed_vectors: np.ndarray, rebuild: bo
 def run(limit: int | None = None, rebuild: bool = False) -> IngestReport:
     start = datetime.now(timezone.utc)
 
-    records = load.load_english_subset(limit=limit, rebuild=rebuild)
+    records = load.load_ingest_subset(limit=limit, rebuild=rebuild)
     rows_loaded = len(records)
 
     records = _classify_all(records)

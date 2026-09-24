@@ -392,6 +392,232 @@ while planning or verifying and recorded rather than silently absorbed.
 
 ---
 
+## D17 — CP7: offline evaluation
+
+- **Offline evaluation ≠ `verify`** (`evaluation-design.md` §1). The code lives in `evals/`,
+  feedback keys never say "verif", and no evaluator changes a run.
+- **Held-out examples.** The 15 corpus examples come from outside `dataset_tickets`, and
+  none has an indexed near-duplicate (cosine ≥ 0.92). `ingest/load.load_ingest_subset` drops
+  them from every future ingest, filtered after the `--limit` sample so existing samples
+  don't shift. Without this, the agent would retrieve an eval ticket's own answer.
+- **The brief's five example tickets are not in the repo.** `evals/brief_examples.json` is
+  the slot. `dataset.sync` adds them without gold labels, and the label-based evaluators
+  skip them.
+- **A fifth evaluator, `outcome_appropriateness`.** CP7 lists four; REQUIREMENTS §8 also
+  requires "overall agent behaviour". It is code-only: the gold `answer_class` implies the
+  expected outcome.
+- **Graded retrieval relevance.** The binary judge scored exact-request neighbours on a
+  different platform as irrelevant, so the judge grades relevant / partial / irrelevant
+  (1 / 0.5 / 0).
+- **Trace metadata.** `service._run_config` adds `ticket_id`, `customer_id` and `thread_id`
+  to every invocation, not only eval runs.
+- **Failed runs are skipped, not scored.** The first experiment hit an Anthropic
+  credit-balance error on its last 4 examples. A target that raises reaches the evaluators
+  as `{"output": None}`, which had been scored as 0.0 retrieval and 1.0 tool use. Every
+  evaluator now skips a run without an `outcome`.
+
+---
+
+## D18 — Cost: prompt budget, prompt caching, and fixing over-asking
+
+Measured on the first eval experiment (LangSmith token counts): **$1.91 for 15 tickets**.
+`investigate` (Sonnet) accounted for 81% of it: 56 calls, 532K input tokens, and 49K
+output tokens, a large share of them adaptive-thinking tokens. Two tickets that went
+through 3 retrieval rounds accounted for 47% of the `investigate` cost.
+
+- **Prompt budget** (`graph/retrieval.py`):
+  - `investigate` shows at most 12 graph-retrieved cases, with 300-character snippets
+    (was up to 30 cases × 600 + 600 characters).
+  - `search_similar_tickets` returns 300-character snippets.
+  - `assess_evidence` keeps every relevant case (its shares are weighted over all of them)
+    but with 300-character snippets.
+  - Full text is one `get_ticket_by_id` call away, which is the D7 small-to-big design.
+- **Prompt caching.** `investigate`'s ReAct call sends `cache_control={"type":
+  "ephemeral"}`, i.e. automatic caching up to the last block. Tool-search hits are no
+  longer rendered into the system block; they are already in their tool result. So the
+  system prefix stays fixed for a whole round and every ReAct turn after the first reads
+  it from cache.
+- **Projection:** replaying the 11 valid tickets' checkpoints against the call sequence
+  in their traces gives `investigate` input of 532K → 369K tokens after trimming → about
+  147K effective after caching, **not yet measured** (Anthropic credit ran out).
+- **Over-asking (CP7's worst evaluator, `outcome_appropriateness` 0.36).** Two changes:
+  - The assess prompt limits `missing_slots` to facts that block choosing or applying a
+    fix: at most 2, and not merely because historical agents asked for them.
+  - `next_action_for` escalates on a matched rule before refining or asking
+    (graph-design §4.2 step 0).
+
+---
+
+## D19 — Fewer model calls: Python for deterministic work, one call per investigation round
+
+**Problem, measured on the first eval experiment:** 106 agent LLM calls for 12 tickets, about
+9 per ticket. Several were a model doing what code can do, or re-reading what another call had
+just read:
+
+| Before | Calls in the eval | Why it existed |
+|---|---|---|
+| `triage` (Haiku) | 15 | Classify queue/type/priority |
+| `investigate` conclusion (Sonnet) | ~18 | A second full-context call after the last ReAct turn, only to extract JSON |
+| `assess_evidence` (Haiku) | 18 | Re-read the same cases to cluster them and find missing facts |
+| `refine_retrieval` rewrite (Haiku) | 6 | Turn the hypothesis into a search query |
+| `escalate` (Sonnet) | 4 | Write the handoff note and holding reply |
+| `update_memory` (Haiku) | 3 | Extract durable facts, called for every ticket |
+
+**What changed (chosen by the user from an audit of every call site):**
+- **`triage` → Python.** A similarity × cluster-weighted vote over the retrieved neighbours'
+  own dataset labels. The labels are the ground truth `classification_accuracy` scores
+  against, so the vote is measurable, and it is free. The `escalation` skill is selected by
+  rule (escalation-class share ≥ 0.4, or a high-stakes term). `skills/triage.md` was removed.
+- **`investigate` ends with a `submit_findings` tool call.** Its arguments (`Findings`) carry
+  hypothesis, evidence, clusters, missing facts, the clarification question and the
+  human-action flag. This removes both the separate conclusion call and the `assess_evidence`
+  model: the investigator judges the evidence it just gathered, in the same turn.
+  - The arguments are schema-typed and Pydantic-validated. This deviates from CLAUDE.md's
+    "structured steps use `.with_structured_output`": the structure arrives as a tool call.
+  - If the model answers in prose or the budget is spent, one forced `submit_findings` call
+    runs with thinking disabled, because Anthropic forbids forced tool choice with thinking.
+- **`assess_evidence` → Python only.** It computes verdict, rule and route from `findings`
+  plus code metrics.
+- **`refine_retrieval` V3 → Python.** The hypothesis statement is the query; its and the
+  evidence's entities (the `ENTITY` pattern) become forced BM25 phrases.
+- **`escalate` → template.** Reason from the trigger/rule, handoff from hypothesis, cited
+  evidence, customer answers and missing facts, and a holding reply that honours a
+  remembered contact channel. It can only cite `evidence` entries, so it cannot invent a
+  case. `verify` checks it with code rules G1–G3 only, since no model wrote a claim; the LLM
+  claim check still runs on every `resolve` draft.
+- **`update_memory` gated.** A regex for write-policy candidates (versions, OS names,
+  deployment/plan words, "already tried…", stated preferences) runs first; the extraction
+  call happens only on a match. W6 flags are still recomputed every time.
+- **`resolve` → fast tier.** This relaxes D11: drafter and checker are now the same model,
+  and the separation rests on the role (a separate adversarial prompt) plus the
+  model-independent code rules.
+
+**Result:**
+- **Calls per ticket:** typical ticket from ~9 LLM calls to ~3 (the investigate tool turns, one
+  `submit_findings`, one `resolve` draft). Every other node is Python.
+- **Same 12 tickets:** 106 agent calls → ~41 (projected from the recorded call sequences).
+- **Cost:** combined with D18, projected at roughly a third of the original agent cost. **Not
+  yet measured**, because Anthropic credit ran out; the next eval run records the real
+  numbers here.
+
+---
+
+## D20 — Provider-switchable models: Groq GPT-OSS alongside Claude
+
+**Why:** after D18/D19 cut the number of calls, per-token price is the remaining lever. On
+Groq, GPT-OSS 20B costs $0.075 in / $0.30 out per million tokens, against Claude Haiku 4.5
+at $1 / $5 and Sonnet 5 at $2 / $10: about 13–33× cheaper.
+
+**Locked stack:** this adds a second provider. The user proposed and approved it on
+2026-09-25. Claude stays the default; Groq is opt-in per tier.
+
+**What changed:**
+- **Model strings pick the provider.** `AUTOSUPPORT_MAIN_MODEL` / `_FAST_MODEL` accept
+  `anthropic:…` or `groq:…`.
+- **Keys are required only for providers in use.** `config.py` fails fast with the missing
+  variable's name.
+- **New dependency: `langchain-groq`.** It is the official provider package for
+  `init_chat_model("groq:…")`, adding 2 packages; `httpx` and `pydantic` were already present.
+- **A separate eval judge.** `AUTOSUPPORT_JUDGE_MODEL` grades the offline eval, so swapping
+  a tier under test never changes who grades it.
+- **Provider differences live in `llm.py` helpers, so nodes stay provider-agnostic:**
+  - Anthropic-only request options: `cache_control` and `thinking`.
+  - `structured()`: strict JSON schema on Groq.
+  - `must_call_a_tool()`: `tool_choice="required"` on Groq.
+
+**Measured on GPT-OSS 20B before wiring it in:**
+- **Plain calls, `DraftOutput` and `VerificationJudgement`:** all worked. The checker caught
+  a "this will definitely fix it" overclaim at a `low` band.
+- **`MemoryUpdate`:** returned the schema's own shape until `strict=True`, then correct.
+  Hence `structured()`.
+- **Free ReAct turn:** with `tool_choice="auto"`, one call reasoned until the token limit and
+  called nothing. With `"required"`: 8/8 tool calls. Hence `must_call_a_tool()`.
+- **Forced `submit_findings`:** valid `Findings` with sensible stances and clusters.
+- **Reasoning effort:** default averaged ~840 output tokens per turn; "low" averaged ~50 but
+  always searched first. Default is kept: about $0.0003 per turn.
+
+**Free tier too small (resolved).** Groq's free tier allows 8,000 tokens/min and 1,000
+requests/day per model, and a single `investigate` request measured 9,657 tokens. The
+account moved to the Dev tier: 250K tokens/min, 500K requests/day.
+
+**Found in the first live Groq ticket** (end to end in 35s):
+- **`tool_use_failed`.** With tool use required, GPT-OSS 20B sometimes writes the `Findings`
+  JSON as text, and Groq rejects the response with a 400. A failed free turn now falls into
+  the forced-`submit_findings` path, which retries once (`llm.is_tool_use_failure`). The text
+  is never parsed; the retry returns a validated tool call.
+- **It asked the customer for their S3 access key and secret key**, and listed 4 missing
+  details against the prompt's "at most 2". Code now enforces both
+  (`assessment.askable_slots`): secret-type details are dropped, the list is capped at 2,
+  and the question is rebuilt from what's left whenever anything was removed. A support
+  agent must never ask for credentials, whichever model is behind it.
+
+**Found in the eval runs:**
+- **A tool that wasn't offered.** In the forced fallback, GPT-OSS once called
+  `search_similar_tickets` although only `submit_findings` was offered. The fallback now makes
+  3 attempts. If none returns valid findings, the round degrades to explicit "no findings" with
+  a recorded error, and the ticket escalates to a person instead of crashing (graph test
+  added).
+- **20B vs 120B for `investigate`.** GPT-OSS 20B marked all evidence `neutral` even with 18
+  relevant cases at 0.889 similarity, so nothing could reach "sufficient" (outcome 0.21).
+  120B gives usable stances: all 15 tickets ran, outcome 0.33 before D21.
+
+**Adopted defaults** (user decision, 2026-09-25):
+- `investigate`: `groq:openai/gpt-oss-120b`
+- `resolve`, `verify`, memory: `groq:openai/gpt-oss-20b`
+- eval judge: `groq:openai/gpt-oss-120b`
+- Claude remains a one-line switch in `.env`.
+
+**Result — first run (Claude, original pipeline) vs final run (Groq + D18–D21), same 15
+held-out tickets:**
+
+| | Claude, original | Groq + D18–D21 |
+|---|---|---|
+| Eval run cost, judge included | $1.91 | **$0.061** (31× cheaper) |
+| Agent cost per ticket | ~$0.15 | **$0.0033** (~45× cheaper) |
+| LLM calls per ticket | ~9 | **3.9** |
+| Time per ticket | ~100 s | ~5–13 s |
+| `outcome_appropriateness` | 0.36 | **0.47** |
+| Tickets resolved | 0 | 2 |
+| `retrieval_relevance` | 0.63 | 0.65 |
+| `tool_usage_correctness` | 1.00 | 0.91 |
+| `classification_accuracy` | 0.52 (LLM) | 0.49 (Python vote, D19) |
+
+The LLM-judged scores come from different judges (Sonnet 5 vs GPT-OSS 120B), so they are
+indicative only. Calls, cost, tool usage, classification and outcome are measured the same
+way in both columns.
+
+---
+
+## D21 — "Conflicting" means competing fixes, not noisy labels
+
+**Problem, measured in the eval:** no ticket resolved in any run, on any model (0/11 Claude,
+0/14 GPT-OSS 20B, 0/15 GPT-OSS 120B). On 3 of the 5 resolution-class tickets the dominant
+cluster was 100% `resolution`-class, with 3–4 supporting cases, yet the verdict was
+`conflicting` for two reasons:
+- **Queue agreement.** The relevant cases' queue labels agreed only 20–33% of the time, and
+  the dataset's queue labels are noisy (`classification_queue` scores 0.27–0.50 against them).
+- **Non-answers counted as rivals.** Clusters of "asked for more info" or "escalated" answers
+  counted as rival approaches, which dragged the real fix's share below 0.6.
+
+**Change** (`assessment.verdict_for`, graph-design §5):
+- A cluster *proposes a fix* if at least half its weight is resolution-class.
+- `conflicting` = two or more fix-proposing clusters with the largest under 0.6 of their
+  weight, or the customer's history contradicts the approach.
+- No fix-proposing cluster at all = `insufficient`.
+- The queue-agreement test now only triggers retrieval variant V4.
+
+**Result:**
+- **Simulated first:** replaying the 15 stored checkpoints, first decisions matching the
+  historical outcome went from 5/15 to 8/15, with no escalation- or clarification-class
+  ticket getting worse.
+- **Then measured:** see D20's table. Outcome was 0.47, and the first resolutions appeared.
+  Which resolution tickets resolve varies between runs (HF-54906 resolved in one run and
+  escalated in the next), so single-run differences on 15 tickets are noise-sized.
+
+---
+
+---
+
 ## Open, pending data
 
 All items previously listed here are resolved, with measured numbers, in `rag-design.md`'s

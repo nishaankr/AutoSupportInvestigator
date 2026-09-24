@@ -214,8 +214,26 @@ def run_eval(
     dataset: Optional[str] = typer.Option(None, "--dataset", help="LangSmith dataset name."),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
-    """Run the LangSmith evaluation suite."""
-    raise NotImplementedError
+    """Run the offline LangSmith evaluation (not the in-graph verify step)."""
+    from autosupport import service
+
+    try:
+        summary = service.run_eval(dataset)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        typer.echo(summary.model_dump_json())
+        return
+    typer.echo(f"experiment {summary.experiment_name}  (dataset {summary.dataset}, {summary.n_examples} examples)")
+    for key, mean in summary.means.items():
+        typer.echo(f"  {key:<28} {'-' if mean is None else f'{mean:.2f}'}")
+    main_keys = ["response_groundedness", "retrieval_relevance", "tool_usage_correctness",
+                 "classification_accuracy", "outcome_appropriateness"]
+    typer.echo("\nexample     outcome               " + "  ".join(k[:10] for k in main_keys))
+    for row in summary.rows:
+        cells = "  ".join(f"{'-' if row.scores.get(k) is None else f'{row.scores[k]:.2f}':>10}" for k in main_keys)
+        typer.echo(f"{row.example_id:<11} {row.outcome:<21} {cells}")
 
 
 @app.command()

@@ -2,13 +2,15 @@
 evidence check. Not the LangSmith evaluation (CLAUDE.md): this gates the run, that one scores
 it afterwards.
 
-Fast tier — deliberately a different tier from the drafter (`resolve`/`escalate` are main
-tier, decisions.md D11), a cheap guard against a model agreeing with its own output.
+Fast tier. Since D19 `resolve` drafts on the fast tier too, so the drafter/checker model
+separation of D11 now rests on the role, not the model: the checker is a separate call with an
+adversarial prompt, and the code rules below are model-independent.
 
-1. Rule pass (code): grounding rules G1-G3 (`graph/verification.py`).
+1. Rule pass (code): grounding rules G1-G3 (`graph/verification.py`), on every draft.
 2. Confidence, computed without the verification cap, gives the band (§4.5 step 1).
-3. Fast-tier judgement: claims not supported by the cited cases, and wording that overclaims
-   that band ("this will fix it" at `low`) — this is the confidence calibration §4.5 describes.
+3. Fast-tier judgement, for model-written (`resolve`) drafts only: claims not supported by the
+   cited cases, and wording that overclaims that band ("this will fix it" at `low`). The
+   templated escalation draft (D19) has no model-written claims, so it gets the rules only.
 4. Recompute confidence with the outcome, which applies the `verification_failed` cap (§4.5
    step 3), and write `confidence`. Only this node ever writes it.
 
@@ -30,7 +32,7 @@ from autosupport.graph.routers import verify_destination
 from autosupport.graph.runconfig import run_setting
 from autosupport.graph.state import AgentState, VerificationResult
 from autosupport.graph.verification import grounding_issues
-from autosupport.llm import fast_llm
+from autosupport.llm import fast_llm, structured
 from autosupport.store import cases as cases_repo
 from autosupport.store import db as store_db
 
@@ -61,20 +63,12 @@ def verify(state: AgentState, config: RunnableConfig) -> dict:
 
     preliminary = compute_confidence(evidence, assessment, None, tau_rel)
 
-    conn = store_db.connect()
-    try:
-        cases_block = evidence_context(evidence, state.get("retrieved_cases", []), conn)
-    finally:
-        conn.close()
-    handoff = f"\nHandoff summary: {draft.escalation.handoff_summary}" if draft.escalation else ""
-    judgement: VerificationJudgement = fast_llm().with_structured_output(
-        VerificationJudgement, method="json_schema"
-    ).invoke([
-        ("system", _SYSTEM_PROMPT),
-        ("user", f"Confidence band: {preliminary.band} (value {preliminary.value})\n\n"
-                 f"Draft analysis:\n{draft.analysis}\n\nDraft reply:\n{draft.resolution}{handoff}\n\n"
-                 f"Cases the draft may rely on:\n\n{cases_block}"),
-    ])
+    if decision == "escalate":
+        # The escalation draft is assembled by code from state (D19): it can only cite
+        # `evidence` entries and states no fix, so there is no model-written claim to check.
+        judgement = VerificationJudgement()
+    else:
+        judgement = _claim_check(state, draft, evidence, preliminary)
 
     passed = not rule_issues and not judgement.unsupported_claims and not judgement.overclaims
     action = "none"
@@ -107,3 +101,17 @@ def verify(state: AgentState, config: RunnableConfig) -> dict:
             conn.close()
         update["status"] = "awaiting_user"
     return update
+
+
+def _claim_check(state: AgentState, draft, evidence, preliminary) -> VerificationJudgement:
+    conn = store_db.connect()
+    try:
+        cases_block = evidence_context(evidence, state.get("retrieved_cases", []), conn)
+    finally:
+        conn.close()
+    return structured(fast_llm(), VerificationJudgement).invoke([
+        ("system", _SYSTEM_PROMPT),
+        ("user", f"Confidence band: {preliminary.band} (value {preliminary.value})\n\n"
+                 f"Draft analysis:\n{draft.analysis}\n\nDraft reply:\n{draft.resolution}\n\n"
+                 f"Cases the draft may rely on:\n\n{cases_block}"),
+    ])

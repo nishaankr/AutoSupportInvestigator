@@ -112,6 +112,37 @@ class ApproachCluster(BaseModel):
     case_ids: list[str]
 
 
+class Findings(BaseModel):
+    """What `investigate` submits to end a round, as the arguments of its `submit_findings` tool
+    call: the hypothesis and evidence plus the judgement `assess_evidence` used to ask a second
+    model for. One model call instead of two (decisions.md D19); `assess_evidence` turns it into
+    a verdict and a route in Python."""
+
+    hypothesis: str = Field(description="One or two sentences: what is wrong and what fixes it, or that no fix is on record.")
+    root_cause_category: str = Field(description="Short label, e.g. 'configuration', 'billing', 'feature request'.")
+    supporting_case_ids: list[str] = Field(default_factory=list)
+    contradicting_case_ids: list[str] = Field(default_factory=list)
+    evidence: list[EvidenceItem] = Field(default_factory=list, description="Each case you rely on or that cuts against you, with its stance.")
+    clusters: list[ApproachCluster] = Field(
+        default_factory=list,
+        description="Group the relevant cases by the resolution approach their historical answers took; a case in at most one cluster.")
+    missing_slots: list[str] = Field(
+        default_factory=list,
+        description="At most 2 facts that are not in the ticket, profile or the customer's answers AND without which the fix "
+                    "can't be chosen or applied. Not details historical agents merely asked for; a general request "
+                    "(information, recommendations, pricing, how-to) needs none. Usually empty.")
+    gap_is_retrievable: bool = Field(
+        default=False,
+        description="True only if what you already know is enough to write a better search (narrower queue, sharper terms). "
+                    "False when the gap is a fact only the customer has.")
+    history_contradicts: bool = Field(default=False, description="The customer's own history contradicts the dominant approach.")
+    requires_human_action: str | None = Field(
+        default=None, description="If the fix needs something an agent can't do (refund, account change, on-site visit), what; else null.")
+    clarification_question: str | None = Field(
+        default=None, description="If missing_slots is non-empty: ONE focused question to the customer asking for exactly those facts.")
+    reason: str = Field(description="One or two sentences: why the evidence is or isn't enough.")
+
+
 class EvidenceAssessment(BaseModel):
     verdict: Verdict
     relevant_count: int
@@ -316,6 +347,7 @@ class AgentState(TypedDict, total=False):
     # investigation
     hypothesis: Hypothesis | None
     evidence: list[EvidenceEntry]
+    findings: Findings | None  # written only by `investigate` (its submit_findings call, D19)
     evidence_assessment: EvidenceAssessment | None
     tool_calls_this_round: int
     tool_log: Annotated[list[ToolCallRecord], operator.add]
@@ -359,7 +391,7 @@ class OutputState(TypedDict):
 # notes" and the risk this resolves, recorded in docs/project/decisions.md's CP3 entry.
 CHECKPOINTED_MODELS: list[type[BaseModel]] = [
     TicketInput, Classification, RetrievedCase, RetrievalQuery, Hypothesis, EvidenceItem,
-    EvidenceEntry, ApproachCluster, EvidenceAssessment, ToolCallRecord, ClarificationTurn,
+    EvidenceEntry, ApproachCluster, Findings, EvidenceAssessment, ToolCallRecord, ClarificationTurn,
     EscalationDraft, DraftResponse, Confidence, VerificationResult, VerificationOutcome,
     EscalationBlock, CustomerMemory, CaseSummary, RunStats, CaseResult,
 ]
