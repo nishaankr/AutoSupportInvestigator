@@ -6,9 +6,9 @@ so code computes it rather than asking the model for it (output-schema.md D2 "th
 can't inflate a number it never writes"; F3 in the CP3 plan) — `TriageOutput` below
 deliberately omits it.
 
-`active_skills` is written `[]` at CP3: skill selection needs the skill files CP4 adds
-(F6 in the CP3 plan). Node 4's prompt is a module constant here and moves to
-`skills/triage.md` at CP4, per `tools-and-skills.md`'s per-node skill-loading rule.
+`active_skills` is written by the model from CP4 on (F6 in the CP3 plan is resolved): the
+prompt is `skills/triage.md`, not a module constant, so the "removing a skill file changes
+behaviour" test (checkpoints.md CP4) applies to `triage` too, not just `investigate`.
 """
 
 from __future__ import annotations
@@ -19,27 +19,14 @@ from pydantic import BaseModel, Field
 
 from autosupport.graph.state import AgentState, Classification, Priority, RetrievedCase
 from autosupport.llm import fast_llm
+from autosupport.skills import load_skill
 from autosupport.store import cases as cases_repo
 from autosupport.store import db as store_db
 
-_KNOWN_QUEUES = (
-    "Billing and Payments, Customer Service, General Inquiry, Human Resources, IT Support, "
-    "Product Support, Returns and Exchanges, Sales and Pre-Sales, Service Outages and "
-    "Maintenance, Technical Support"
-)
-_KNOWN_TYPES = "Incident, Problem, Request, Change"
-
-_SYSTEM_PROMPT = f"""You triage an incoming support ticket. Pick the queue and type that best
-match the corpus this agent was built against, so retrieval and reporting stay comparable
-across tickets. Known queues: {_KNOWN_QUEUES}. Known types: {_KNOWN_TYPES}. Use one of these
-verbatim unless the ticket genuinely fits none of them.
-
-You are given the ticket, the customer's known profile (if any) and the metadata of the
-most similar historical cases retrieved so far. Use the neighbours' queue/type/priority as a
-strong prior, but not a rule — the ticket's own content wins if it clearly disagrees.
-
-Priority is one of: low, medium, high, critical. Tags are short lower-case slugs.
-`rationale` is one or two sentences a human reviewer can check against the ticket."""
+# The only optional skill triage can activate at CP4 (tools-and-skills.md §2) — validated
+# against this set rather than trusted verbatim, since a model-invented name would otherwise
+# crash `load_skill` inside `investigate` instead of failing here, at the boundary.
+_KNOWN_OPTIONAL_SKILLS = {"escalation"}
 
 
 class TriageOutput(BaseModel):
@@ -48,6 +35,7 @@ class TriageOutput(BaseModel):
     priority: Priority
     tags: list[str] = Field(default_factory=list)
     rationale: str
+    active_skills: list[str] = Field(default_factory=list)
 
 
 def triage(state: AgentState) -> dict:
@@ -71,10 +59,10 @@ def triage(state: AgentState) -> dict:
         f"Retrieved neighbours:\n{neighbour_block}"
     )
 
-    # method="json_schema": see resolve.py's module docstring for why the default
-    # ("function_calling", forced tool choice) isn't reliable for this model.
+    # method="json_schema": see decisions.md D13 for why the default ("function_calling",
+    # forced tool choice) isn't reliable for these two models.
     output: TriageOutput = fast_llm().with_structured_output(TriageOutput, method="json_schema").invoke(
-        [("system", _SYSTEM_PROMPT), ("user", user_prompt)]
+        [("system", load_skill("triage")), ("user", user_prompt)]
     )
 
     classification = Classification(
@@ -92,7 +80,8 @@ def triage(state: AgentState) -> dict:
     finally:
         conn.close()
 
-    return {"classification": classification, "active_skills": [], "status": "investigating"}
+    active_skills = [s for s in output.active_skills if s in _KNOWN_OPTIONAL_SKILLS]
+    return {"classification": classification, "active_skills": active_skills, "status": "investigating"}
 
 
 def _neighbor_agreement(retrieved: list[RetrievedCase]) -> float:

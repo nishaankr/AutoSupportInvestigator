@@ -296,6 +296,32 @@ these two models.
 
 ---
 
+## D14 — CP4: ReAct loop, tools and skills — scoped choices
+
+- **`route_after_investigate` exits to `resolve`, not `assess_evidence`** (graph-design.md
+  §4.2 names `assess_evidence`, which is CP5). Same tool-vs-stop logic; CP5 swaps the target.
+- **`investigate` uses two LLM shapes.** The tool-deciding turn is `bind_tools` (a ReAct turn
+  isn't a fixed-schema step, so CLAUDE.md's `.with_structured_output` rule doesn't apply to
+  it); once the model stops calling tools, one structured call (`json_schema`, D13) extracts
+  `hypothesis` and `evidence`, enriched by `graph/evidence.enrich`. `resolve` reverts to
+  prose only, as D13 Q2 planned.
+- **Custom `tools` node, not prebuilt `ToolNode`**, so it can write `tool_log`,
+  `tool_calls_this_round` and merge `search_similar_tickets` hits into `retrieved_cases`.
+- **`get_customer_history` closes over `customer_id`** — never a model-supplied argument.
+- **`escalate_ticket` is advisory at CP4** (logged, shown to the model); routing to an
+  escalation outcome is CP5's `assess_evidence`/`escalate`.
+- **Skills:** `triage` (fixed), `investigation` (fixed), `customer_response` (fixed),
+  `escalation` (optional, added to `active_skills` by `triage`; fixed for CP5's `escalate`).
+  `load_skill` has no fallback — a missing file raises, so deleting one visibly changes
+  behaviour.
+- **Bug found in live verification:** `persist_case` hardcoded `stats.tool_calls = 0`; now
+  `len(tool_log)` (regression test in `tests/test_persist_case.py`).
+- **`autosupport.tools` imports are aliased** (`... as _search_similar_tickets`): a plain
+  import rebinds the package attribute from the submodule to the function, breaking dotted-path
+  monkeypatching.
+
+---
+
 ## Open, pending data
 
 All items previously listed here are resolved, with measured numbers, in `rag-design.md`'s

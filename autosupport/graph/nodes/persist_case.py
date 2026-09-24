@@ -1,12 +1,12 @@
 """Node 15: `persist_case` (graph-design.md, output-schema.md) — builds the final
 `CaseResult` and writes it to `cases`.
 
-At CP3 every run reaches here with `decision == "resolve"` (F8 in the CP3 plan: there's no
-`escalate` node yet), `confidence`/`verification` unset (Q1: required again from CP5, once
+At CP4 every run still reaches here with `decision == "resolve"` (F8 in the CP3 plan: there's
+no `escalate` node yet), `confidence`/`verification` unset (Q1: required again from CP5, once
 `verify` is the gate every path passes through), and `acceptance == "not_required"` (F7:
-`confirm_resolution` never runs). `stats` is filled from the counters `intake` initialised;
-every one of them is 0 except `retrieval_rounds`, since CP3 has no tool/verify/revision
-loop to increment the others.
+`confirm_resolution` never runs). `stats.tool_calls` counts `tool_log`, which the
+`investigate <-> tools` loop populates from CP4 on; `verify_attempts`/`revisions` stay 0
+until CP5 adds those loops.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ def persist_case(state: AgentState) -> dict:
         clarifications=state.get("clarifications", []),
         stats=RunStats(
             retrieval_rounds=state.get("retrieval_round", 0),
-            tool_calls=0,
+            tool_calls=len(state.get("tool_log", [])),
             verify_attempts=0,
             revisions=0,
         ),

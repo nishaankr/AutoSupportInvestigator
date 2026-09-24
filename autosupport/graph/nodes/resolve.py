@@ -1,95 +1,95 @@
 """Node 11: `resolve` (graph-design.md) — main tier, drafts a grounded resolution.
 
-At the full design, `investigate` produces `evidence` (output-schema.md §3.2) and `resolve`
-only drafts prose against it. CP3 has no `investigate`, so `resolve` does both in one call:
-its structured output includes the `EvidenceItem` list alongside the draft, and this node
-runs the same `graph/evidence.enrich()` that `investigate` will reuse at CP4
-(docs/project/decisions.md CP3 entry, Q2). Nothing about `enrich()` itself is CP3-specific.
+From CP4 on, `investigate` produces `evidence` (output-schema.md §3.2); `resolve` only
+drafts prose against it, matching the full design (decisions.md D13 Q2 — CP3 was the one-off
+exception, since it had no `investigate`). `resolve` still needs the actual historical text
+behind each evidence entry (an `EvidenceEntry` carries `subject` but not the answer itself),
+so it reads `retrieved_cases` for cases that came from retrieval and falls back to a direct
+SQLite lookup (`_fallback_text`) for evidence sourced elsewhere (e.g. customer history).
 
-CP3 has no `escalate` node (graph-design.md's decision routing isn't built yet), so every
-ticket resolves (F8 in the CP3 plan) — the prompt below is explicit that the model must say
-plainly, in the resolution text, when the retrieved evidence doesn't actually support a fix,
-rather than inventing one. CP5 adds the real `investigate ⇄ tools` loop and `escalate`.
+CP4 has no `escalate` node yet (that's CP5's `assess_evidence`/`escalate` routing), so every
+ticket still resolves through here — the skill is explicit that the model must say plainly
+when the evidence doesn't support a fix, rather than inventing one.
 
-`method="json_schema"` (not the `with_structured_output` default) — reproduced directly
-against the live API: Claude Sonnet 5 runs with reasoning enabled by default, and
-`langchain-anthropic`'s default `method="function_calling"` doesn't force the tool call when
-reasoning is on, which let the model return an incomplete/malformed tool call (missing
-`resolution`, or evidence-shaped text leaking into `analysis`) on a nontrivial prompt, every
-time. Claude's native structured-output feature (`method="json_schema"`) doesn't depend on
-forced tool choice and was reliable in the same repro. `triage.py` carries the same fix.
+`method="json_schema"`: see decisions.md D13 for why the default `with_structured_output`
+method is unreliable for these two models.
 """
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+import sqlite3
 
-from autosupport.graph.evidence import enrich
-from autosupport.graph.state import AgentState, DraftResponse, EvidenceItem, RetrievedCase
+from pydantic import BaseModel
+
+from autosupport.graph.state import AgentState, DraftResponse, EvidenceEntry, RetrievedCase
 from autosupport.llm import main_llm
+from autosupport.skills import load_skill
 from autosupport.store import db as store_db
 
-_SYSTEM_PROMPT = """You draft a customer-facing resolution for a support ticket, grounded
-only in the retrieved historical cases you are shown. You may not invent a fix that isn't
-attested by at least one retrieved case.
 
-For every case you rely on, add it to `evidence` with a one-line summary (problem -> what
-resolved it) and a stance: "supports" if it backs your resolution, "contradicts" if it
-points to a different cause or fix, "neutral" if it's related but doesn't bear on your
-conclusion either way. Cite every case you use inline, in your `analysis` and `resolution`
-text, as `[case_id]`, e.g. `[HF-10432]`. Only cite a case that's also in `evidence`.
-
-Cases are labelled by `answer_class`: "resolution" means the historical answer contains an
-actual fix; "clarification_request" means the historical answer asked the customer a
-question; "escalation" means the historical answer was a handoff with no grounded fix. If
-the retrieved cases are mostly not `resolution`-class, or don't match this ticket well, say
-so plainly in `resolution` rather than manufacturing a confident-sounding fix — a resolution
-draft is allowed to tell the customer what's being looked into instead of a fix.
-
-`analysis` is written for a support agent reviewing your work: the hypothesis, how the
-evidence agreed or conflicted, what was ruled out. `resolution` is the customer-facing
-reply."""
-
-
-class ResolveOutput(BaseModel):
-    evidence: list[EvidenceItem] = Field(default_factory=list)
+class DraftOutput(BaseModel):
     analysis: str
     resolution: str
 
 
 def resolve(state: AgentState) -> dict:
     ticket = state["ticket"]
-    retrieved = state.get("retrieved_cases", [])
     classification = state["classification"]
+    evidence = state.get("evidence", [])
+    retrieved = state.get("retrieved_cases", [])
 
-    cases_block = "\n\n".join(_format_case(c) for c in retrieved) or "(no retrieved cases)"
+    conn = store_db.connect()
+    try:
+        evidence_block = _evidence_block(evidence, retrieved, conn)
+    finally:
+        conn.close()
+
+    hypothesis = state.get("hypothesis")
+    hypothesis_line = f"Investigator's hypothesis: {hypothesis.statement}\n\n" if hypothesis else ""
     user_prompt = (
         f"Subject: {ticket.subject}\n\nBody: {ticket.body}\n\n"
         f"Classification: queue={classification.queue}, type={classification.type}, "
         f"priority={classification.priority}\n\n"
-        f"Retrieved cases:\n\n{cases_block}"
+        f"{hypothesis_line}"
+        f"Evidence gathered during investigation:\n\n{evidence_block}"
     )
 
-    output: ResolveOutput = main_llm().with_structured_output(ResolveOutput, method="json_schema").invoke(
-        [("system", _SYSTEM_PROMPT), ("user", user_prompt)]
+    output: DraftOutput = main_llm().with_structured_output(DraftOutput, method="json_schema").invoke(
+        [("system", load_skill("customer_response")), ("user", user_prompt)]
     )
-
-    conn = store_db.connect()
-    try:
-        evidence, enrich_errors = enrich(output.evidence, retrieved, conn)
-    finally:
-        conn.close()
 
     draft = DraftResponse(analysis=output.analysis, resolution=output.resolution, escalation=None)
-    result: dict = {"draft": draft, "evidence": evidence, "decision": "resolve"}
-    if enrich_errors:
-        result["errors"] = enrich_errors
-    return result
+    return {"draft": draft, "decision": "resolve"}
 
 
-def _format_case(c: RetrievedCase) -> str:
-    return (
-        f"[{c.case_id}] subject={c.subject!r} answer_class={c.answer_class} "
-        f"cluster_size={c.cluster_size} similarity={c.similarity:.2f}\n"
-        f"problem: {c.body_snippet}\nhistorical answer: {c.answer_snippet}"
-    )
+def _evidence_block(evidence: list[EvidenceEntry], retrieved: list[RetrievedCase], conn: sqlite3.Connection) -> str:
+    if not evidence:
+        return "(no evidence gathered)"
+    by_id = {c.case_id: c for c in retrieved}
+    blocks = []
+    for e in evidence:
+        rc = by_id.get(e.case_id)
+        problem, answer = (rc.body_snippet, rc.answer_snippet) if rc else _fallback_text(conn, e.case_id)
+        blocks.append(
+            f"[{e.case_id}] stance={e.stance} answer_class={e.answer_class} cluster_size={e.cluster_size}\n"
+            f"investigator's note: {e.summary}\nproblem: {problem}\nhistorical answer: {answer}"
+        )
+    return "\n\n".join(blocks)
+
+
+def _fallback_text(conn: sqlite3.Connection, case_id: str) -> tuple[str, str]:
+    """An evidence entry not backed by a `retrieved_cases` hit (e.g. sourced from customer
+    history) still needs grounding text — one direct lookup rather than dropping it silently."""
+    if case_id.startswith("HF-"):
+        row = conn.execute("SELECT body_ix, answer_ix FROM dataset_tickets WHERE case_id = ?", (case_id,)).fetchone()
+        return (row["body_ix"], row["answer_ix"]) if row else ("(unavailable)", "(unavailable)")
+
+    row = conn.execute("SELECT body, final_output FROM cases WHERE ticket_id = ?", (case_id,)).fetchone()
+    if row is None:
+        return "(unavailable)", "(unavailable)"
+    answer = "(no resolution on file — this case is open or was escalated)"
+    if row["final_output"]:
+        from autosupport.graph.state import CaseResult
+
+        answer = CaseResult.model_validate_json(row["final_output"]).resolution
+    return row["body"], answer

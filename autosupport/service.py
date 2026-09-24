@@ -98,7 +98,18 @@ def new_ticket(customer_id: str, subject: str, body: str) -> TicketOutcome:
         "customer_id": customer_id,
         "ticket": TicketInput(subject=subject, body=body),
     }
-    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": settings.recursion_limit}
+    config = {
+        "configurable": {
+            "thread_id": thread_id,
+            "max_tool_calls_per_round": settings.max_tool_calls_per_round,
+            "max_retrieval_rounds": settings.max_retrieval_rounds,
+            "max_clarifications": settings.max_clarifications,
+            "max_verify_retries": settings.max_verify_retries,
+            "max_revisions": settings.max_revisions,
+            "tau_rel": settings.tau_rel,
+        },
+        "recursion_limit": settings.recursion_limit,
+    }
     output = compiled_graph().invoke(input_state, config)
 
     return TicketOutcome(
