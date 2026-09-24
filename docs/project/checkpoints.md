@@ -162,7 +162,7 @@ parallel after `persist_case`. Escalated and rejected cases are not indexed.
 Read `evaluation-design.md`; write it if absent. Keep the naming distinct from the `verify`
 node — these are different things and a reviewer will check that you know it.
 
-**Build:** an eval dataset of ~15 examples (reuse the example tickets from `docs/brief.md`),
+**Build:** an eval dataset of ~15 examples (reuse the example tickets from `docs/project/brief.md`),
 and four evaluators: response quality/groundedness, retrieval relevance, tool-usage
 correctness, classification accuracy against the dataset's own `queue`/`type`/`priority`
 labels — that last one is free ground truth, use it. Run with `require_acceptance=false` and
@@ -206,7 +206,7 @@ Reserved. If CP5 overruns, it comes from here.
 
 ## Parallel track (do these while something else runs)
 
-- **During CP0:** write `docs/brief.md` — client context, the problem, what the agent must do,
+- **During CP0:** write `docs/project/brief.md` — client context, the problem, what the agent must do,
   five example tickets, the trust contract, constraints, out-of-scope, definition of done.
   Those five example tickets become the CP7 eval dataset and the CP8 demo script. Writing
   them once serves three checkpoints.

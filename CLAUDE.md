@@ -4,8 +4,8 @@ Autonomous Support Investigation Agent. A local LangGraph agent that receives a 
 ticket, investigates it against a corpus of ~28K historical tickets, decides whether it has
 enough information, and produces a grounded resolution or an escalation.
 
-**Read `docs/checkpoints.md` before starting work.** It defines the build order and what
-"done" means for each stage. Do not skip ahead.
+**Read `docs/project/checkpoints.md` before starting work.** It defines the build order and
+what "done" means for each stage. Do not skip ahead.
 
 ---
 
@@ -62,7 +62,9 @@ AutoSupport/
 ├── README.md
 ├── pyproject.toml
 ├── .env.example                  # committed, no secrets
-├── docs/                         # design docs — read before implementing a layer
+├── docs/
+│   ├── design/                   # read before implementing that layer
+│   └── project/                  # brief, build-plan checkpoints, decision record
 ├── skills/                       # triage.md, investigation.md, escalation.md, customer_response.md
 ├── autosupport/
 │   ├── cli.py                    # Typer commands — rendering only
@@ -81,10 +83,14 @@ AutoSupport/
 └── data/                         # runtime, gitignored
 ```
 
-Design docs, by layer: `architecture.md`, `graph-design.md`, `state-schema.md`,
-`rag-design.md`, `tools-and-skills.md`, `memory-design.md`, `case-persistence.md`,
-`evaluation-design.md`, `output-schema.md`. **Read the relevant doc before implementing
-that layer.** Where a doc and this file disagree, this file wins; flag the conflict.
+Design docs, by layer, all under `docs/design/`: `architecture.md`, `graph-design.md`,
+`state-schema.md`, `rag-design.md`, `tools-and-skills.md`, `memory-design.md`,
+`case-persistence.md`, `evaluation-design.md`, `output-schema.md`. **Read the relevant doc
+before implementing that layer.** Where a doc and this file disagree, this file wins; flag
+the conflict.
+
+Process docs, under `docs/project/`: `checkpoints.md` (the build plan), `decisions.md` (the
+decision record), `brief.md` (client context — written during CP0's parallel track).
 
 ---
 

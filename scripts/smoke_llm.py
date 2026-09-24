@@ -1,5 +1,5 @@
 """CP0 smoke test. Model-string mistakes are the single most common way to lose 30
-minutes on day one (docs/checkpoints.md) — this sends one trivial message to each
+minutes on day one (docs/project/checkpoints.md) — this sends one trivial message to each
 tier and prints the reply, so a bad model string or missing key fails immediately
 and visibly rather than inside a graph run."""
 
