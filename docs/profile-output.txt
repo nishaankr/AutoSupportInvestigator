@@ -1,0 +1,200 @@
+======================================================================
+Dataset profile -- Tobi-Bueck/customer-support-tickets
+All sections below are over the English subset unless noted.
+======================================================================
+
+SHAPE & COLUMNS
+  raw shape: (61765, 16)
+  english shape: (28261, 16)
+  columns: ['subject', 'body', 'answer', 'type', 'queue', 'priority', 'language', 'version', 'tag_1', 'tag_2', 'tag_3', 'tag_4', 'tag_5', 'tag_6', 'tag_7', 'tag_8']
+
+LANGUAGE x VERSION (raw, before the English filter)
+  lang='de' version=None: 21255
+  lang='en' version=None: 11923
+  lang='en' version=400: 10441
+  lang='de' version=400: 8158
+  lang='en' version=52: 5346
+  lang='de' version=52: 3773
+  lang='en' version=51: 551
+  lang='de' version=51: 318
+
+ENGLISH ROWS PER VERSION
+  version=None: 11923
+  version=400: 10441
+  version=52: 5346
+  version=51: 551
+
+QUEUE VALUE COUNTS
+  Technical Support: 8149
+  Product Support: 5305
+  Customer Service: 4269
+  IT Support: 3333
+  Billing and Payments: 2897
+  Returns and Exchanges: 1402
+  Service Outages and Maintenance: 1106
+  Sales and Pre-Sales: 843
+  Human Resources: 553
+  General Inquiry: 404
+
+TYPE VALUE COUNTS
+  Incident: 11213
+  Request: 8163
+  Problem: 5895
+  Change: 2990
+
+PRIORITY VALUE COUNTS
+  medium: 11570
+  high: 10917
+  low: 5774
+
+BODY LENGTH -- describe()
+  count: 28261.0
+  mean: 371.3
+  std: 202.9
+  min: 0.0
+  25%: 203.0
+  50%: 365.0
+  75%: 533.0
+  max: 1793.0
+
+ANSWER LENGTH -- describe()
+  count: 28261.0
+  mean: 372.6
+  std: 178.5
+  min: 0.0
+  25%: 219.0
+  50%: 372.0
+  75%: 519.0
+  max: 1315.0
+
+NULL COUNTS (pandas isna(), all columns)
+  subject: 3639
+  body: 1
+  answer: 6
+  type: 0
+  queue: 0
+  priority: 0
+  language: 0
+  version: 11923
+  tag_1: 0
+  tag_2: 16
+  tag_3: 113
+  tag_4: 2584
+  tag_5: 11960
+  tag_6: 20353
+  tag_7: 24562
+  tag_8: 26653
+
+EMPTY-STRING COUNTS (text fields; distinct from null above)
+  subject: 3639
+  body: 1
+  answer: 6
+
+EXACT DUPLICATE COUNTS (normalized: lowercase, whitespace-collapsed)
+  subject: 11301 rows across 5603 distinct duplicate values
+  body: 9201 rows across 4595 distinct duplicate values
+  answer: 9276 rows across 4635 distinct duplicate values
+
+TAGS PER ROW -- distribution (count of non-null tag_1..tag_8 per row)
+  1 tags: 16 rows
+  2 tags: 97 rows
+  3 tags: 2471 rows
+  4 tags: 9376 rows
+  5 tags: 8393 rows
+  6 tags: 4209 rows
+  7 tags: 2091 rows
+  8 tags: 1608 rows
+
+TOP 50 FLATTENED TAGS (tag_1..tag_8 combined)
+  Tech Support: 14444
+  IT: 14052
+  Performance: 11423
+  Feedback: 8724
+  Documentation: 7657
+  Bug: 7534
+  Security: 6602
+  Feature: 5792
+  Disruption: 4249
+  Outage: 3594
+  Technical: 3531
+  Network: 3251
+  Product: 2764
+  Sales: 2610
+  Resolution: 2414
+  Guidance: 1997
+  Recovery: 1773
+  Billing: 1738
+  Crash: 1726
+  Integration: 1399
+  Hardware: 1384
+  Payment: 1354
+  Maintenance: 1103
+  Marketing: 1081
+  Customer: 1074
+  Support: 1063
+  Software: 1022
+  Incident: 906
+  Account: 865
+  Virus: 726
+  Strategy: 723
+  Breach: 651
+  Alert: 590
+  Compliance: 501
+  Analytics: 492
+  Follow-Up: 455
+  Refund: 452
+  Campaign: 429
+  Investigation: 416
+  Login: 386
+  Issue: 380
+  Training: 366
+  Lead: 362
+  Encryption: 311
+  Notification: 283
+  Troubleshooting: 263
+  Compatibility: 238
+  Assistance: 234
+  Customer Support: 228
+  Server: 228
+
+ANSWER PATTERN HIT RATES (same patterns as rag-design.md §4.2)
+  clarification-like: 14292 (50.6%)
+  escalation-like: 257 (0.9%)
+
+5 SAMPLE ROWS (untruncated, distinct queue/type, >=1 clarification-style)
+----------------------------------------------------------------------
+row index=1  queue='Returns and Exchanges'  type='Request'  priority='medium'
+language='en'  version=51.0
+tags=['Product', 'Feature', 'Tech Support']
+SUBJECT: Query About Smart Home System Integration Features
+BODY: Dear Customer Support Team,\n\nI hope this message reaches you well. I am reaching out to request detailed information about the capabilities of your smart home integration products listed on your website. As a potential customer aiming to develop a seamlessly interconnected home environment, it is essential to understand how your products interact with various smart home platforms.\n\nCould you kindly provide detailed compatibility information with popular smart home ecosystems such as Amazon Alexa, Google Assistant, and Apple?
+ANSWER: Thank you for your inquiry. Our products support integration with Amazon Alexa, Google Assistant, and Apple HomeKit. Compatibility details can differ depending on the specific item; please let us know which models you are interested in. The setup process is generally user-friendly but may require professional installation. We regularly update our software to provide enhanced features. For comprehensive information on compatibility with upcoming updates, please specify the models you are considering.
+----------------------------------------------------------------------
+row index=0  queue='Technical Support'  type='Incident'  priority='high'
+language='en'  version=51.0
+tags=['Account', 'Disruption', 'Outage', 'IT', 'Tech Support']
+SUBJECT: Account Disruption
+BODY: Dear Customer Support Team,\n\nI am writing to report a significant problem with the centralized account management portal, which currently appears to be offline. This outage is blocking access to account settings, leading to substantial inconvenience. I have attempted to log in multiple times using different browsers and devices, but the issue persists.\n\nCould you please provide an update on the outage status and an estimated time for resolution? Also, are there any alternative ways to access and manage my account during this downtime?
+ANSWER: Thank you for reaching out, <name>. We are aware of the outage affecting the centralized account management system, and our technical team is actively working to resolve the issue. In the meantime, we suggest using alternative methods to manage your account, with a focus on restoring service as quickly as possible. We will provide an update as soon as the service is back online. We apologize for the inconvenience and appreciate your patience. If you have any further questions, please let us know.
+----------------------------------------------------------------------
+row index=2  queue='Billing and Payments'  type='Request'  priority='low'
+language='en'  version=51.0
+tags=['Billing', 'Payment', 'Account', 'Documentation', 'Feedback']
+SUBJECT: Inquiry Regarding Invoice Details
+BODY: Dear Customer Support Team,\n\nI hope this message finds you well. I am reaching out to request clarification about the billing and payment procedures linked to my account. Recently, I observed some inconsistencies in the charges applied and would like to ensure I fully understand the billing cycle, accepted payment options, and any potential extra charges.\n\nFirstly, I would be grateful if you could provide a detailed explanation of how the billing cycle functions. Specifically, I am interested in knowing the start and end dates.\n\nThank you for your assistance regarding these billing inquiries.
+ANSWER: We appreciate you reaching out with your billing questions. The billing period generally begins on the first day of the month and concludes on the last day, with payments due by the 10th of the following month. We accept credit cards, bank transfers, and certain online payment services; credit card transactions are typically processed the quickest. Late payments may incur fees based on the due date, and any additional processing charges depend on the chosen payment method. You can review your statements for detailed payment information.
+----------------------------------------------------------------------
+row index=3  queue='Sales and Pre-Sales'  type='Problem'  priority='medium'
+language='en'  version=51.0
+tags=['Product', 'Feature', 'Feedback', 'Tech Support']
+SUBJECT: Question About Marketing Agency Software Compatibility
+BODY: Dear Support Team,\n\nI hope this message reaches you well. I am reaching out to ask about the compatibility of your products with the specific needs of marketing agencies. Our company is considering adopting these solutions to streamline our current marketing processes and wants to confirm that the products are fully compatible with the tools and platforms we currently utilize.\n\nCould you please supply detailed information regarding the compatibility of your products with popular marketing software, CRM systems, email marketing applications, and analytics platforms? Additionally, I would appreciate any relevant case studies or documentation tailored to our use case.
+ANSWER: Thank you for your inquiry. Our product supports integration with major CRM, email marketing, and analytics platforms through APIs and customization options. Please specify the tools you are using so we can provide you with detailed documentation and relevant case studies.
+----------------------------------------------------------------------
+row index=4  queue='Technical Support'  type='Request'  priority='high'
+language='en'  version=51.0
+tags=['Feature', 'Product', 'Documentation', 'Feedback']
+SUBJECT: Feature Query
+BODY: Dear Customer Support,\n\nI hope this message reaches you in good health. I am eager to learn more about the features of one of your products. Would you be able to share comprehensive details about its functionalities, specifications, and any distinctive characteristics it may possess? Additionally, if there are user manuals, tutorials, or demonstration videos available, I would be grateful if you could provide those resources. Gaining a thorough understanding of the features will assist me in making an informed decision regarding the product.\n\nThank you very much for your assistance. I look forward to your prompt reply.\n\nBest regards
+ANSWER: Thank you for your inquiry. Please specify which product you are interested in, so I can provide detailed information, features, and relevant resources.
+----------------------------------------------------------------------
