@@ -1,11 +1,9 @@
-"""`AgentState` and every Pydantic sub-model it carries (`state-schema.md` §2-3,
-`output-schema.md` §2-§3, §7). One module for both, because `state-schema.md` §3 explicitly
-defers `CaseResult`/`Confidence`/etc. to `output-schema.md` to avoid a second copy drifting
-out of sync — this file is that single copy.
+"""The graph's state and every model it carries, from the ticket coming in to the final
+`CaseResult` going out (state-schema.md, output-schema.md).
 
-Deviations from the doc sketches, tracked in `docs/project/decisions.md` and reflected in the
-docs: `TicketInput.submitted_at`/`ClarificationTurn.asked_at` use a timezone-aware factory,
-not the deprecated `datetime.utcnow`; `AgentState.escalation_trigger` is added (D15 F4).
+Working state and the final output live in one module on purpose: the output reuses the
+state's models (evidence, confidence, classification), and a second copy would drift.
+Anything written by parallel branches has a reducer; everything else has exactly one writer.
 """
 
 from __future__ import annotations
@@ -122,10 +120,14 @@ class Findings(BaseModel):
     root_cause_category: str = Field(description="Short label, e.g. 'configuration', 'billing', 'feature request'.")
     supporting_case_ids: list[str] = Field(default_factory=list)
     contradicting_case_ids: list[str] = Field(default_factory=list)
-    evidence: list[EvidenceItem] = Field(default_factory=list, description="Each case you rely on or that cuts against you, with its stance.")
+    evidence: list[EvidenceItem] = Field(
+        default_factory=list,
+        description="EVERY retrieved case that supports or contradicts the hypothesis, with its stance — typically 2 to 6, "
+                    "not only the single best match. A fix is only recommended when at least two cases support it.")
     clusters: list[ApproachCluster] = Field(
         default_factory=list,
-        description="Group the relevant cases by the resolution approach their historical answers took; a case in at most one cluster.")
+        description="Group EVERY case marked relevant=yes (not only the ones you cite) by the approach their historical "
+                    "answers took; each case in at most one cluster.")
     missing_slots: list[str] = Field(
         default_factory=list,
         description="At most 2 facts that are not in the ticket, profile or the customer's answers AND without which the fix "

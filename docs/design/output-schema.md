@@ -1,6 +1,7 @@
 # Output Schema — `CaseResult`, Confidence, Evidence
 
-> **Status:** Draft v1 · the structured deliverable produced for every ticket.
+> **Status:** v2 · reconciled with `graph/state.py` / `persist_case` at CP8. The structured
+> deliverable produced for every ticket.
 > **Companion docs:** `state-schema.md` (where these models sit in state), `graph-design.md` (which nodes write them), `decisions.md` D12 (why confidence is computed).
 > Built by `persist_case`, stored as JSON in `cases.final_output`, returned by `service.py`, rendered by `cli.py`, dumped verbatim by `--json`.
 
@@ -72,7 +73,7 @@ The model only ever sees `EscalationDraft` (`target_queue`, `reason`, `handoff_s
 | `approach` | `str \| None` | code | Filled by `persist_case`: the label of the `ApproachCluster` in the final `evidence_assessment` that contains this case, if any |
 
 ### 3.2 How an entry is built
-1. `investigate`'s model emits `EvidenceItem` (`case_id`, `summary`, `stance`). This is its judgement.
+1. `investigate`'s model emits `EvidenceItem` (`case_id`, `summary`, `stance`) inside its `submit_findings` call (D19). This is its judgement.
 2. Still inside `investigate`, code looks each `case_id` up in SQLite, adds `similarity` from `retrieved_cases`, and writes the enriched `EvidenceEntry` list into `state.evidence`. Unknown IDs are dropped and logged to `errors`.
 3. `persist_case` fills in `approach` from the final assessment's clusters.
 
@@ -162,7 +163,7 @@ value     = round(clamp(min(base − penalty, cap), 0, 1), 2)
 ### 4.5 Where it is computed
 Confidence is computed **only in `verify`**, once per verification attempt:
 1. Compute the value from the evidence, without the verification cap, and derive its band.
-2. The fast-tier check receives that band and flags wording that overclaims it, such as "this will fix it" at `low`. This is what `graph-design.md` means by confidence calibration.
+2. The fast-tier check receives that band and flags wording that overclaims it, such as "this will fix it" at `low`. This is what `graph-design.md` means by confidence calibration. It runs on `resolve` drafts only; the templated escalation draft contains no model-written claims (D19).
 3. Once the verification result is in, apply the `verification failed` cap if it applies, and write `state.confidence`.
 
 Every path to `confirm_resolution` and `persist_case` passes through `verify`, so no other node writes confidence. `resolve` and `escalate` never produce a number. Accepting or rejecting a resolution doesn't change it, and a revised draft gets a fresh value at its own `verify`.
@@ -185,7 +186,7 @@ Similarities below are realistic for this corpus, not illustrative round numbers
 **Example E is the sharpest illustration of resolution-only substantive**: even though a case was retrieved at reasonable similarity (.77, just above τ_rel), it's `escalation`-class — "this also got escalated" is not a diagnosis — so `W_s = 0` and the score floors at exactly 0.00, not a small positive number. An earlier draft of this table (before Decision 3) let escalation-class evidence count as substantive and scored this same shape of scenario at 0.05; the corrected version is a better fit for §4.1's stated meaning: this escalation genuinely has *no* grounded diagnosis behind it, and the number should say so plainly.
 
 ### 4.8 Calibration hook
-`evaluation-design.md` (CP7) buckets runs by band and compares the buckets against the groundedness evaluator. High-band results should score higher than medium, and medium higher than low. If they don't, the constants are wrong: change them here and record why.
+The plan was for `evaluation-design.md` to bucket runs by band and compare the buckets against the groundedness evaluator (high above medium above low; if not, the constants are wrong). **Not built at CP7:** the 15-example eval produced 2–3 resolutions per run, far too few to bucket. It stays the calibration method once the dataset is large enough; until then the constants are as designed, uncalibrated.
 
 ---
 

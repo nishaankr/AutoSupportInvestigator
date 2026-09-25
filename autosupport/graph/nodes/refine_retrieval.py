@@ -1,14 +1,12 @@
-"""Nodes 8-9: `refine_retrieval` and `retrieve_variant` (graph-design.md §8, rag-design.md §10).
+"""Nodes 8–9: `refine_retrieval` and `retrieve_variant` — a second, targeted round of retrieval.
 
-`refine_retrieval` picks up to three query variants and fans out with `Send`; each
-`retrieve_variant` runs the full hybrid pipeline (k=8) independently and the `merge_cases`
-reducer dedups their results. Every variant's `similarity` is re-anchored to the *ticket*
-before merging (graph/retrieval.py, D15 F1).
+`refine_retrieval` picks up to three query variants (rag-design.md §10) and fans them out in
+parallel with `Send`; each `retrieve_variant` runs the full hybrid search on its own, and the
+`merge_cases` reducer combines the results. Each variant's similarity is re-anchored to the
+ticket before merging, so every case is compared on the same scale.
 
-Written by the parallel `retrieve_variant` branches: `retrieved_cases` (merge_cases),
-`retrieval_queries` (operator.add), `errors` (operator.add) — and nothing else. The counter
-`retrieval_round` is written once, here, before the fan-out, so no two branches ever write
-the same non-reducer key.
+The parallel branches only write reducer keys (`retrieved_cases`, `retrieval_queries`,
+`errors`). The round counter is written once, here, before the fan-out.
 """
 
 from __future__ import annotations

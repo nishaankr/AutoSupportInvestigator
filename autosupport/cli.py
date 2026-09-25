@@ -1,8 +1,7 @@
-"""Typer commands — rendering only. Every command will call service.py, the only
-thing this module is allowed to call once it exists (CLAUDE.md). No business logic
-lives here, and this module must never import graph/, rag/, store/ or ingest/
-directly. It must not import config or service at module level either, so that
-`autosupport --help` works with no `.env` present."""
+"""The `autosupport` command line. It only renders: every command calls `service.py` and
+prints what comes back (or dumps it with `--json`). Nothing here imports the graph or the
+stores, and even `service` is imported inside each command, so `autosupport --help` works
+before a `.env` exists."""
 
 from __future__ import annotations
 
@@ -19,9 +18,9 @@ app = typer.Typer(name="autosupport", help="Autonomous Support Investigation Age
 
 @app.callback()
 def _utf8_output() -> None:
-    """Model text routinely contains characters (arrows, dashes, curly quotes) that a Windows
-    console/redirect encoding (cp1252) can't encode, which crashed `--json > file` after the
-    graph had already finished. Output is always UTF-8."""
+    """Always write UTF-8. Model text is full of arrows, dashes and curly quotes that the
+    default Windows encoding (cp1252) can't represent — it once crashed `--json > file` after
+    the whole run had already finished."""
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
@@ -228,32 +227,44 @@ def run_eval(
     typer.echo(f"experiment {summary.experiment_name}  (dataset {summary.dataset}, {summary.n_examples} examples)")
     for key, mean in summary.means.items():
         typer.echo(f"  {key:<28} {'-' if mean is None else f'{mean:.2f}'}")
-    main_keys = ["response_groundedness", "retrieval_relevance", "tool_usage_correctness",
-                 "classification_accuracy", "outcome_appropriateness"]
-    typer.echo("\nexample     outcome               " + "  ".join(k[:10] for k in main_keys))
+    main_keys = ["pattern_behaviour", "retrieval_relevance", "tool_usage_correctness",
+                 "classification_accuracy", "response_groundedness"]
+    typer.echo(f"\n{'example':<22} {'outcome':<20} " + "  ".join(k[:10] for k in main_keys))
     for row in summary.rows:
         cells = "  ".join(f"{'-' if row.scores.get(k) is None else f'{row.scores[k]:.2f}':>10}" for k in main_keys)
-        typer.echo(f"{row.example_id:<11} {row.outcome:<21} {cells}")
+        typer.echo(f"{row.example_id:<22} {row.outcome:<20} {cells}")
 
 
 @app.command()
 def demo(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
-    """Scripted run of the four required demo scenarios end-to-end."""
-    raise NotImplementedError
+    """Scripted run of the four required demo scenarios end-to-end (scripts/demo.py)."""
+    from autosupport import service
+
+    report = service.run_demo()
+    if json_output:
+        typer.echo(report.model_dump_json())
+        return
+    typer.echo(f"AutoSupport demo — run {report.run_id}")
+    for scenario in report.scenarios:
+        typer.echo(f"\n{'PASS' if scenario.passed else 'NOT MET'}  {scenario.title}")
+        for line in scenario.lines:
+            typer.echo(f"    {line}")
+    met = sum(s.passed for s in report.scenarios)
+    typer.echo(f"\n{met}/{len(report.scenarios)} scenarios demonstrated.")
 
 
 @app.command()
 def search(
     query: str = typer.Argument(..., help="Query text."),
     k: int = typer.Option(10, "--k", help="Number of results."),
-    queue: Optional[str] = typer.Option(None, "--queue", help="Filter to one queue (dense arm only)."),
+    queue: Optional[str] = typer.Option(None, "--queue", help="Filter to one queue (both arms)."),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
-    """TEMPORARY (CP2, docs/project/checkpoints.md) — prints fused hybrid-retrieval results
-    with each arm's rank, the fused RRF score, similarity, cluster_size and answer_class.
-    Removed once the graph nodes that call rag/queries.py directly exist."""
+    """Inspect hybrid retrieval directly: each arm's rank, the fused RRF score, similarity,
+    cluster_size and answer_class. Built at CP2 to verify retrieval before the graph existed,
+    and kept because it's the quickest way to see why a ticket found (or missed) a case."""
     from autosupport import service
 
     hits = service.search(query, k=k, queue=queue)

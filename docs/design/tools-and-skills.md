@@ -1,6 +1,6 @@
 # Tools and Skills
 
-> **Status:** Draft v1 · CP4. **Companion docs:** `graph-design.md` §3 (node table), `rag-design.md`
+> **Status:** v2 · reconciled at CP8. **Companion docs:** `graph-design.md` §3 (node table), `rag-design.md`
 > (retrieval internals the tools wrap), `case-persistence.md`/`memory-design.md` (tables read).
 > Tools are `@tool`-decorated functions in `autosupport/tools/`; `build_tools(customer_id,
 > ticket_id)` assembles the bound set for one graph run. Skills are `skills/*.md`, loaded by name via
@@ -44,11 +44,20 @@ Nothing else is optional; skills are never concatenated into one prompt (CLAUDE.
   grounding, and stop calling tools once the evidence is enough to state a hypothesis with
   supporting/contradicting case IDs — don't call a tool "just in case."
   This is the loop `graph-design.md` §1 requires to make real decisions rather than a fixed
-  sequence, per `REQUIREMENTS.md` §3's "Important implementation rule."
-- **`escalation.md`** — how to write a target queue, a one/two-sentence reason and a handoff
-  summary a human agent can act on without re-reading the whole ticket; when a case actually
-  warrants escalation (CP5's `escalate` node) versus just flagging risk mid-investigation
-  (`escalate_ticket`, CP4).
+  sequence, per `REQUIREMENTS.md` §3's "Important implementation rule." Since D19 it also
+  says how to end a round with `submit_findings` — cite every supporting/contradicting case,
+  cluster every case marked `relevant=yes`, and list a missing fact only if it blocks the fix.
+- **`escalation.md`** — layered onto `investigation` when `triage` flags the ticket as
+  escalation-bound: decide early whether a person is needed (and say what in
+  `requires_human_action` / `escalate_ticket`), and make the findings a usable handoff, since
+  the `escalate` template is assembled from them. *v1 had this skill drive a model-written
+  handoff in the `escalate` node; D19 made that node a Python template.*
 - **`customer_response.md`** — draft the customer-facing resolution grounded only in cited
   evidence, cite every case relied on as `[case_id]`, and say plainly when the evidence
   doesn't support a confident fix rather than inventing one (output-schema.md §1 principle 2).
+  The reply is sent as written: no placeholders like `[Your Name]`, no invented document or
+  portal names (D22, found in the CP8 demo).
+
+**Skill count:** three skills are in use — the REQUIREMENTS minimum. v1 had a fourth,
+`triage.md`; `triage` stopped calling a model in D19, and the file was removed rather than
+left unused.

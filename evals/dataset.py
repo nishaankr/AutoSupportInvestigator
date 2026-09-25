@@ -1,27 +1,19 @@
-"""The LangSmith eval dataset (evaluation-design.md §2): held-out corpus examples with their
-gold labels, plus the brief's example tickets once `brief_examples.json` exists."""
+"""The LangSmith eval dataset (evaluation-design.md §2): five real corpus tickets, one per
+behaviour pattern, built by `evals/select_examples.py` into `evals/examples.jsonl`."""
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from autosupport.ingest.load import HOLDOUT_PATH
 
 DEFAULT_DATASET = "autosupport-eval"
-BRIEF_PATH = Path(__file__).parent / "brief_examples.json"
 
 
 def local_examples() -> list[dict]:
-    """Every example as `{example_id, inputs, reference}`. Brief examples have no gold labels
-    (`reference` is `{}`), so the label-based evaluators skip them."""
+    """Every example as `{example_id, inputs, reference, holdout_ids}`."""
     lines = HOLDOUT_PATH.read_text(encoding="utf-8").splitlines()
-    examples = [json.loads(line) for line in lines if line.strip()]
-    if BRIEF_PATH.exists():
-        for i, ticket in enumerate(json.loads(BRIEF_PATH.read_text(encoding="utf-8")), start=1):
-            examples.append({"example_id": f"BRIEF-{i}",
-                             "inputs": {"subject": ticket["subject"], "body": ticket["body"]}, "reference": {}})
-    return examples
+    return [json.loads(line) for line in lines if line.strip()]
 
 
 def sync(client, name: str) -> int:

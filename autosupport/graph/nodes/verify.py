@@ -1,22 +1,21 @@
-"""Node 13: `verify` (graph-design.md, output-schema.md §3.5, §4.5) — the **in-graph**
-evidence check. Not the LangSmith evaluation (CLAUDE.md): this gates the run, that one scores
-it afterwards.
+"""Node 13: `verify` — the in-graph evidence check on every draft, before anything is final.
 
-Fast tier. Since D19 `resolve` drafts on the fast tier too, so the drafter/checker model
-separation of D11 now rests on the role, not the model: the checker is a separate call with an
-adversarial prompt, and the code rules below are model-independent.
+Not to be confused with the offline LangSmith evaluation: this gates one ticket's answer while
+it runs; the evaluation scores the whole system afterwards.
 
-1. Rule pass (code): grounding rules G1-G3 (`graph/verification.py`), on every draft.
-2. Confidence, computed without the verification cap, gives the band (§4.5 step 1).
-3. Fast-tier judgement, for model-written (`resolve`) drafts only: claims not supported by the
-   cited cases, and wording that overclaims that band ("this will fix it" at `low`). The
-   templated escalation draft (D19) has no model-written claims, so it gets the rules only.
-4. Recompute confidence with the outcome, which applies the `verification_failed` cap (§4.5
-   step 3), and write `confidence`. Only this node ever writes it.
+1. Code rules G1–G3 (`graph/verification.py`) on every draft: no citing a case that isn't in
+   the evidence, a resolution must cite a supporting resolution-class case, and every
+   contradicting case must be acknowledged.
+2. Confidence is computed without the pass/fail cap, to get the band the wording must respect.
+3. For drafts a model wrote (`resolve`), a separate model call looks for claims the cited cases
+   don't back and for wording that promises more than the band allows ("this will fix it" at
+   `low`). The templated escalation has no model-written claims, so it gets the rules only.
+4. Confidence is recomputed with the outcome — a failed check caps it — and written. Nothing
+   else ever writes confidence.
 
-When the next hop is `confirm_resolution`, this node also marks the case `awaiting_user`
-(the node that routes into an interrupt does the side effect — graph-design.md §7.4).
-`routers.verify_destination` is the single definition of that next hop.
+If the next stop is `confirm_resolution`, this node marks the case `awaiting_user` itself,
+because the interrupt node must not touch the database. `routers.verify_destination` decides
+that next stop for both this node and the router, so the two can't disagree.
 """
 
 from __future__ import annotations

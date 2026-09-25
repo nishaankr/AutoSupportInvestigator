@@ -1,8 +1,9 @@
-"""The code half of `assess_evidence` (graph-design.md §4.2, §5): relevance, weighted
-dominant-cluster share, the verdict, `escalation_rule_hit` and `next_action`. Pure functions —
-the fast-tier model only supplies the judgements code can't compute (approach clusters,
-missing slots, whether the gap is retrievable), never a verdict or a number
-(output-schema.md §1 principle 2)."""
+"""The rules behind `assess_evidence` (graph-design.md §4.2, §5): which cases are relevant, how
+strongly they agree, the verdict, which escalation rule fires, and what happens next.
+
+All pure functions. The investigator supplies only what code can't work out — how the cases
+group into approaches, what fact is missing, whether a better search could help — and never
+a verdict or a number. Every decision about the ticket's route is made here, in code."""
 
 from __future__ import annotations
 
@@ -66,37 +67,45 @@ def _answer_class_share(ids: list[str], relevant: list[RetrievedCase], answer_cl
 def verdict_for(
     *, relevant: list[RetrievedCase], tau_rel: float, clusters: list[ApproachCluster],
     evidence: list[EvidenceEntry], missing_slots: list[str], history_contradicts: bool,
-) -> tuple[Verdict, float, ApproachCluster | None]:
+) -> tuple[Verdict, float, ApproachCluster | None, str]:
     """graph-design.md §5, checked insufficient -> conflicting -> sufficient. Returns
-    (verdict, dominant_share, dominant_cluster)."""
+    (verdict, dominant_share, dominant_cluster, why). `why` is the code's own reason in plain
+    words; it goes into the escalation handoff, so a person sees which test failed rather than
+    the model's opinion of the evidence, which can disagree with the verdict (D22)."""
     dom, share = dominant_cluster(clusters, relevant)
     top = relevant[0].similarity if relevant else 0.0
     supporting = 0
     if dom:
         supporting = sum(1 for e in evidence if e.stance == "supports" and e.case_id in set(dom.case_ids))
 
-    # F5 (D15): a dominant cluster that is mostly clarification_request tells us what to ask,
-    # not how to fix — insufficient, so the run asks or refines rather than "resolving" on it.
-    clarification_led = bool(dom) and _answer_class_share(
-        dom.case_ids, relevant, "clarification_request") >= CLARIFICATION_SHARE_FLOOR
-    if len(relevant) < MIN_RELEVANT or top < tau_rel or supporting < MIN_SUPPORTING_IN_DOMINANT or clarification_led:
-        return "insufficient", share, dom
+    if len(relevant) < MIN_RELEVANT:
+        return "insufficient", share, dom, f"only {len(relevant)} similar historical case(s) found; {MIN_RELEVANT} needed"
+    if top < tau_rel:
+        return "insufficient", share, dom, "no historical case is close enough to this ticket"
+    if supporting < MIN_SUPPORTING_IN_DOMINANT:
+        return "insufficient", share, dom, (
+            f"only {supporting} case(s) support the most common approach; {MIN_SUPPORTING_IN_DOMINANT} needed")
+    # A dominant cluster that is mostly clarification requests tells us what to ask, not how to
+    # fix it (D15 F5), so it never counts as enough to resolve.
+    if _answer_class_share(dom.case_ids, relevant, "clarification_request") >= CLARIFICATION_SHARE_FLOOR:
+        return "insufficient", share, dom, "similar tickets were mostly answered with questions, not fixes"
 
-    # D21: a conflict is two *fixes* competing. Clusters of "asked for more info" or "escalated"
-    # answers are not competing approaches, and neighbours' queue labels are too noisy to
-    # signal conflict (measured: 3 of 5 resolution-class eval tickets had a 100%-resolution
-    # dominant cluster yet were marked conflicting by those two tests).
+    # A conflict is two *fixes* competing (D21). Clusters of "asked for more info" or
+    # "escalated" answers aren't rival approaches, and the neighbours' queue labels are too
+    # noisy to signal conflict: 3 of 5 resolution-class eval tickets had an all-resolution
+    # dominant cluster yet were called conflicting by those two tests.
     fixes = [cl for cl in clusters if _answer_class_share(cl.case_ids, relevant, "resolution") >= FIX_CLUSTER_FLOOR]
     if not fixes:
-        return "insufficient", share, dom
+        return "insufficient", share, dom, "none of the similar tickets was resolved with a fix"
     weights = {c.case_id: cluster_weight(c.cluster_size) for c in relevant}
     fix_weight = [sum(weights.get(i, 0.0) for i in cl.case_ids) for cl in fixes]
-    fix_share = max(fix_weight) / sum(fix_weight)
-    if (len(fixes) >= 2 and fix_share < DOMINANT_SHARE_FLOOR) or history_contradicts:
-        return "conflicting", share, dom
+    if len(fixes) >= 2 and max(fix_weight) / sum(fix_weight) < DOMINANT_SHARE_FLOOR:
+        return "conflicting", share, dom, "similar tickets were fixed in different ways, with no clear winner"
+    if history_contradicts:
+        return "conflicting", share, dom, "the customer's own history contradicts the usual fix"
     if missing_slots:
-        return "insufficient", share, dom
-    return "sufficient", share, dom
+        return "insufficient", share, dom, "a fact only the customer has is still missing: " + "; ".join(missing_slots)
+    return "sufficient", share, dom, "enough similar resolved tickets agree on one fix"
 
 
 def escalation_rule_hit(
@@ -104,8 +113,8 @@ def escalation_rule_hit(
     requires_human_action: str | None, tool_log: list[ToolCallRecord], profile: CustomerMemory | None,
 ) -> str | None:
     """First matching rule name (graph-design.md §4.2), stored on the assessment and later
-    surfaced as `EscalationBlock.rule`. Computed every assessment; only *acted on* by
-    `next_action_for` when the verdict is sufficient."""
+    surfaced as `EscalationBlock.rule`. A match escalates straight away, whatever the verdict
+    (`next_action_for`, D18)."""
     haystack = " ".join([classification.queue, classification.type, *classification.tags]).lower()
     if classification.priority == "critical" and any(k in haystack for k in HIGH_STAKES):
         return "critical_high_stakes"
@@ -130,6 +139,21 @@ def askable_slots(missing_slots: list[str]) -> list[str]:
     """The model's missing facts, minus anything secret, capped at `MAX_MISSING_SLOTS` —
     the prompt asks for both, code guarantees them."""
     return [s for s in missing_slots if not _SECRET_SLOT.search(s)][:MAX_MISSING_SLOTS]
+
+
+# A ticket this short rarely says what product, what symptom or since when. When its evidence
+# isn't enough and the investigator named no missing fact, ask once instead of escalating an
+# under-specified ticket (D22: the demo's "my app stopped syncing" ticket was escalated
+# unasked in one run and asked in another).
+THIN_TICKET_WORDS = 25
+THIN_TICKET_SLOTS = ["which product, app or feature is affected",
+                     "what exactly happens (any error message) and since when"]
+
+
+def thin_ticket_slots(body: str, verdict: Verdict, slots: list[str]) -> list[str]:
+    if slots or verdict == "sufficient" or len(body.split()) >= THIN_TICKET_WORDS:
+        return slots
+    return THIN_TICKET_SLOTS
 
 
 def next_action_for(

@@ -618,6 +618,122 @@ cluster was 100% `resolution`-class, with 3–4 supporting cases, yet the verdic
 
 ---
 
+## D22 — CP8: making the demo reliable, and what the review found
+
+Building the scripted demo meant running the same tickets many times, which exposed failure
+modes a single eval run didn't. Each fix below was measured before and after.
+
+**Model reliability (GPT-OSS on Groq):**
+
+| Problem found | Fix | Measured |
+|---|---|---|
+| The investigator cited only its single best case and clustered only that one, so the verdict saw 1 supporting case (2 needed) | Prompt and schema: cite *every* supporting/contradicting case; the context marks each case `relevant=yes/no` at τ_rel so the model clusters exactly the set the check weighs | Redis ticket: evidence went from 1 case to 2+ |
+| The 20B drafter omitted `[case_id]` citations; rule G2 rejected sound drafts twice, then escalated | Fast tier moved to `gpt-oss-120b` (MongoDB ticket: 1 of 5 → 5 of 6 reached a proposed resolution); `resolve` names the citable ids; if the draft still cites none, their ids are appended as "Based on similar resolved cases: …" (the claim check still tests every claim against exactly those cases) | Demo scenario 1: 3 of 3 runs |
+| A thin ticket ("my app stopped syncing") was escalated unasked when the model listed no missing fact | Under 25 words, evidence not sufficient, no slots: ask one generic question (product/feature, symptom, since when) before escalating | Demo scenario 2: 3 of 3 runs |
+| `update_memory` crashed a whole run: Groq truncated the JSON at its default output limit (reasoning counts against it) | Explicit 8K output ceiling on Groq; low reasoning effort on the fast tier; a failed extraction goes to `errors` and never fails the ticket (the case is already saved) | No crashes since |
+| Groq rejected malformed generations three ways (`tool_use_failed`, `output_parse_failed`, `json_validate_failed`) in `investigate`, `verify` and memory | One helper, `llm.structured()`, resamples malformed structured calls (3 attempts) for every call site; the forced `submit_findings` gets 3 attempts, then the round degrades to "no findings" and escalates | Graph test covers the degraded path |
+| The escalation handoff quoted the *model's* view ("the evidence is solid…") under a *code* verdict of insufficient | `verdict_for` returns its own plain-language reason ("only 1 case(s) support the most common approach; 2 needed"), used in the handoff and the next round's note | — |
+| A drafted reply signed off as `[Your Name]` and named an invented "Developer Portal" | `customer_response.md`: no placeholders, no documents the evidence doesn't mention | — |
+
+**Result:** the demo passed all four scenarios in three consecutive runs (it failed all four in
+one run before these fixes). Final eval on the same 15 tickets: $0.071 per run ($0.004 per
+ticket), 4.2 LLM calls per ticket, outcome 0.47, tool usage 1.00, retrieval relevance 0.66.
+
+**Fresh-setup check (CP8 "Done"):** a copy of exactly the shippable files (no `data/`, no
+`.venv`), set up by the README's steps. `uv sync` took 18 s, and `autosupport --help` works
+before a `.env` exists. `ingest --limit 300` took 103 s, with 36 ambiguous answers classified
+by Groq. `autosupport new` then ran end to end in 25 s and asked a sensible clarifying
+question.
+
+**Full-corpus ingest check.** The README's "drop `--limit` for everything" had never been run
+at full scale since the ingest changes. It failed after 38 minutes: Chroma caps one upsert at
+5,461 items, and the full corpus has ~11.9K canonicals, which no `--limit` run can reach.
+`_upsert_chroma` now batches at `client.get_max_batch_size()` (test added).
+
+With the fix, the full ingest completed in 36 minutes:
+- 23,786 rows → **11,903 canonicals**.
+- Answer classes: 12,535 clarification requests, 9,029 escalations, 2,222 resolutions.
+- 2,402 answers (10.1%) were classified by the LLM, the rest by heuristic.
+- Hybrid search works on the full index.
+
+It also exhausted the LangSmith free tier's **5,000 traces/month**: each of the 2,402
+classification calls was traced separately. Ingest now runs those calls inside
+`tracing_context(enabled=False)`, because tracing is for agent runs and evals, not batch
+jobs.
+
+**Found in the code review:**
+- **An unused dependency.** `langchain-chroma` was declared in `pyproject.toml` but never
+  imported (`rag/dense.py` uses `chromadb` directly). Removed.
+- **A committed scratch script.** `scratch_cp5/part3.py`, a CP5 verification script, had been
+  committed. Removed.
+- **Stale comments and docstrings.** "Temporary CP2 command", "only reads `dataset_tickets`
+  until CP6", "nothing calls this yet", "the fast-tier model supplies…", "the question is
+  generated in `assess_evidence`", and a router docstring saying a rule only fires on
+  sufficient evidence. All rewritten to describe the code as it is.
+- **Doc reconciliation.** Every `docs/design/*.md` was checked against the code, and each
+  divergence was fixed in place with a note on why (listed in the CP8 report).
+
+---
+
+## D23 — Tracing off by default, and a five-pattern eval
+
+**Was tracing on during ordinary development?**
+- **CP1–CP6: no.** At the start of CP7, `.env` had `LANGSMITH_TRACING=false` and a blank key.
+  The original workspace had no `autosupport` project at all, which LangSmith creates on the
+  first trace. So no `new`, `resume`, test or smoke run from CP1–CP6 was ever traced.
+- **From mid-CP7: yes, globally.** The key was added with `LANGSMITH_TRACING=true`, so every
+  ordinary run was traced from then on: `autosupport new`/`resume`, every demo run, every
+  diagnostic probe. So were the full ingest's 2,402 classification calls. Together these used up
+  the free tier's 5,000 traces/month.
+- The code default was also `langsmith_tracing=True`, so a `.env` without the variable would
+  have traced everything too.
+
+**Change.**
+- **Default off.** `LANGSMITH_TRACING=false` is now the default in `.env`, `.env.example` and
+  `config.py`.
+- **Two things switch tracing on, for themselves only.** `autosupport eval` wraps the experiment
+  in `tracing_context(enabled=True)`. The new `scripts/smoke_langsmith.py` sends exactly one
+  trace, with no LLM call, to check the key, workspace and quota.
+- **Ingest never traces** (D22). A new LangSmith key and an empty workspace were set up on
+  2026-09-25.
+
+**Eval dataset rebuilt: five real tickets, one per pattern** (evaluation-design.md §2, with the
+reason for each pick):
+- **Selection.** No `brief.md` exists. Every input is a cluster member (never searchable
+  itself) or a row outside the index, and every input is excluded from future ingests.
+- **The memory example runs two tickets** in one target call. Ticket 1 is accepted and indexed,
+  then *un-indexed* afterwards (`agent_index.unindex_agent_case`), so a run leaves the corpus
+  as it found it.
+- **Evaluators.** Classification, tool usage (against a per-example allowed set), retrieval
+  (known-good ids) and pattern behaviour are plain code. Only groundedness uses an LLM judge,
+  and it is the only evaluator that traces: evaluator tracing is disabled, and the judge
+  switches it on around its own call.
+- **Trace estimate: 5 pipeline + ≤ 5 judge.**
+
+**Result, first run:**
+- **Behaviour:** 4 of 5 patterns met. Conflicting evidence was judged `insufficient`: the
+  investigator put the divergent answers in one approach cluster.
+- **Scores:** retrieval 1.0, tool usage 1.0, groundedness 0.9 (2 resolutions), classification
+  0.74 (queue 0.4 is label noise).
+- **Traces: 7 for the run** (5 pipeline + 2 judge, exactly as estimated), 9 in the workspace
+  including the smoke tests, of 5,000.
+
+**Found while building it:**
+- **A real bug.** `enrich()` let a duplicated evidence id through, and the final `CaseResult`
+  rejected it in `persist_case` *after* the customer had accepted, which lost the ticket. The
+  first citation now wins (test added).
+- **Drafting on security topics over-elaborates.** The first memory pick (HF-22907, Docker
+  Django security) had sufficient evidence, but the draft added detail no case contained
+  (AES-256, NGINX/HSTS), and `verify` rejected it twice. The check did its job; the drafter is
+  the weak point.
+- **A rule gap.** `critical_high_stakes` needs priority `critical`, but the dataset's
+  priorities stop at `high`, so on this corpus that rule can never fire. HF-7725 escalated
+  anyway, through the other rules.
+- **Retrieval 1.0 is partly by construction.** A member's canonical is a near-copy (≥ 0.92).
+  The memory example is the non-trivial retrieval check.
+
+---
+
 ## Open, pending data
 
 All items previously listed here are resolved, with measured numbers, in `rag-design.md`'s

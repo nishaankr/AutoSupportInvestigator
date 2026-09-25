@@ -1,12 +1,10 @@
-"""Node 15: `persist_case` (graph-design.md, output-schema.md) — builds the final
-`CaseResult` and writes it to `cases`.
+"""Node 15: `persist_case` — assembles the final `CaseResult` and saves it to `cases`.
 
-Every path here has passed through `verify`, so `confidence` and `verification` are always
-present (output-schema.md §4.5). `status` follows `decision`; the `EscalationBlock` combines
-the model's `EscalationDraft` with `escalation_trigger` (captured by `escalate`, D15 F4) and
-the assessment's rule name. `unresolved_issues` is non-empty only for an escalation persisted
-after `verify` retries ran out (graph-design.md §4.2). `approach` on each evidence entry is
-filled from the final assessment's clusters (output-schema.md §3.2 step 3).
+Every route here passes through `verify` first, so confidence and the check's outcome are
+always available. An escalation's block combines the handoff `escalate` assembled with the
+trigger it recorded and, for a rule, the rule's name. `unresolved_issues` is filled only when
+an escalation is saved after the check ran out of retries, so a person sees what never got
+fixed. Each evidence entry is labelled with the approach cluster it belongs to.
 """
 
 from __future__ import annotations

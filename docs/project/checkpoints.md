@@ -162,7 +162,7 @@ parallel after `persist_case`. Escalated and rejected cases are not indexed.
 Read `evaluation-design.md`; write it if absent. Keep the naming distinct from the `verify`
 node — these are different things and a reviewer will check that you know it.
 
-**Build:** an eval dataset of ~15 examples (reuse the example tickets from `docs/project/brief.md`),
+**Build:** an eval dataset of ~15 examples (reuse the example tickets from `docs/project/brief.md` — *as built: that file was never provided, so the dataset is 15 held-out corpus tickets with a `evals/brief_examples.json` slot; decisions.md D17*),
 and four evaluators: response quality/groundedness, retrieval relevance, tool-usage
 correctness, classification accuracy against the dataset's own `queue`/`type`/`priority`
 labels — that last one is free ground truth, use it. Run with `require_acceptance=false` and
@@ -210,6 +210,8 @@ Reserved. If CP5 overruns, it comes from here.
   five example tickets, the trust contract, constraints, out-of-scope, definition of done.
   Those five example tickets become the CP7 eval dataset and the CP8 demo script. Writing
   them once serves three checkpoints.
+  *Status: not done — the brief text was never provided. Demo (CP8) and eval (CP7) use
+  corpus-derived tickets instead; both have a slot for the brief's tickets.*
 - **During CP2:** the full ingest runs in a second terminal.
 - **After each checkpoint:** commit, tag, and note anything that diverged from the docs.
 

@@ -35,10 +35,11 @@ def assess_evidence(state: AgentState, config: RunnableConfig) -> dict:
     ]
     clusters = [cl for cl in clusters if cl.case_ids]
 
-    verdict, share, dom = logic.verdict_for(
+    verdict, share, dom, why = logic.verdict_for(
         relevant=relevant, tau_rel=tau_rel, clusters=clusters, evidence=evidence,
         missing_slots=slots, history_contradicts=findings.history_contradicts,
     )
+    slots = logic.thin_ticket_slots(state["ticket"].body, verdict, slots)
     rule_hit = logic.escalation_rule_hit(
         classification=state["classification"], dom=dom, relevant=relevant,
         requires_human_action=findings.requires_human_action,
@@ -57,7 +58,7 @@ def assess_evidence(state: AgentState, config: RunnableConfig) -> dict:
         top_score=relevant[0].similarity if relevant else 0.0,
         clusters=clusters, dominant_share=round(share, 3), missing_slots=slots,
         gap_is_retrievable=findings.gap_is_retrievable, escalation_rule_hit=rule_hit,
-        next_action=next_action, reason=findings.reason,
+        next_action=next_action, reason=why,
     )
     update: dict = {
         "evidence_assessment": assessment,

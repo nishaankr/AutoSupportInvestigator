@@ -30,7 +30,11 @@ more tool calls to avoid saying so.
 **Ending the round: `submit_findings`.** Always finish by calling `submit_findings` once — never
 answer in prose. Besides the hypothesis and evidence it carries your judgement of the evidence,
 which decides what happens next (resolve, search again, ask the customer, or hand to a human):
-- `clusters`: group the relevant cases by the resolution approach their answers took.
+- `evidence`: every case that supports or contradicts your hypothesis — usually several, not
+  just the closest one. A fix is only recommended when at least two cases back it, so citing
+  one strong match alone makes a well-supported ticket look thin.
+- `clusters`: group every case marked `relevant=yes` by the resolution approach its answer
+  took, including the ones you didn't cite. The evidence check weighs exactly those cases.
 - `missing_slots`: only a fact that blocks choosing or applying the fix. Historical agents often
   asked questions out of habit — that alone is not a missing slot. A request for information,
   recommendations, pricing or how-to needs none.

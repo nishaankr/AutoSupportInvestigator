@@ -234,7 +234,11 @@ def test_a_model_that_never_submits_findings_escalates_instead_of_crashing(env, 
             return type("B", (), {"invoke": fail})()
     monkeypatch.setattr(investigate_node, "main_llm", lambda: _Failing())
     graph, cfg = _graph(env), _config("C-1:T-6")
-    _start(graph, cfg, "T-20260924-000006")
+    # A detailed ticket, so the thin-ticket rule (ask once before escalating) doesn't apply.
+    body = ("After last night's firmware update our NAS no longer shows any SMB shares to Windows clients. "
+            "We restarted the NAS and the Windows machines, checked the network, and the web UI still lists every share.")
+    graph.invoke({"ticket_id": "T-20260924-000006", "customer_id": "C-1",
+                  "ticket": TicketInput(subject="NAS shares gone", body=body)}, cfg)
     result = graph.get_state(cfg).values["final_output"]
     assert result.status == "escalated" and result.escalation.trigger == "evidence_exhausted"
     assert any("no valid submit_findings" in e for e in result.errors)

@@ -1,18 +1,17 @@
-"""Node 5: `investigate` (graph-design.md) — the ReAct step. Forms/revises a hypothesis and
-decides which tools to call; the model picks tools and arguments freely within
-`max_tool_calls_per_round` (route_after_investigate, routers.py).
+"""Node 5: `investigate` — the ReAct step, where the model decides what to look at next.
 
-A round ends when the model calls `submit_findings`: its arguments (`Findings`) carry the
-hypothesis, the evidence and the judgement `assess_evidence` needs (clusters, missing facts,
-clarification question). That replaces two former calls, a separate structured "conclusion"
-call re-sending the whole context and a second model in `assess_evidence` re-reading the same
-cases (decisions.md D19). The arguments are schema-typed and validated with Pydantic here —
-the structured-output guarantee, delivered as a tool call (D19 records the deviation from
-CLAUDE.md's `.with_structured_output` rule).
+The model forms a hypothesis and calls whichever tools it thinks will test it, up to
+`max_tool_calls_per_round` per round. It ends the round by calling `submit_findings`, whose
+arguments (`Findings`) carry the hypothesis, the evidence for and against it, and its judgement
+of whether that's enough (clusters, missing facts, a question for the customer). That single
+call replaced two: a second full-context "conclusion" call, and a separate model in
+`assess_evidence` re-reading the same cases (decisions.md D19). The arguments are validated
+with Pydantic here — structured output delivered as a tool call.
 
-If the model answers in prose instead, or the tool budget is spent, one forced
-`submit_findings` call runs over a transcript. Anthropic forbids forced tool choice while
-thinking is on, so that fallback call disables thinking.
+If the model answers in prose, sends invalid arguments, or runs out of tool budget, a forced
+`submit_findings` call runs over a transcript, up to three times. Anthropic doesn't allow
+forced tool choice while thinking is on, so that call switches thinking off. If even that
+fails, the round ends with "no findings" and the ticket goes to a person instead of crashing.
 """
 
 from __future__ import annotations
@@ -45,7 +44,7 @@ def investigate(state: AgentState, config: RunnableConfig) -> dict:
     skill_text = load_skill("investigation")
     if "escalation" in state.get("active_skills", []):
         skill_text = f"{skill_text}\n\n{load_skill('escalation')}"
-    system = f"{skill_text}\n\n{_context_block(state)}"
+    system = f"{skill_text}\n\n{_context_block(state, run_setting(config, 'tau_rel'))}"
 
     # Re-entered after `refine_retrieval`, a failed `verify` or a rejection: say what changed.
     # Also keeps the conversation ending on a user turn (Claude rejects assistant prefill).
@@ -173,7 +172,7 @@ def _round_note(state: AgentState) -> HumanMessage | None:
     return HumanMessage(content=" ".join(parts), name="system")
 
 
-def _context_block(state: AgentState) -> str:
+def _context_block(state: AgentState, tau_rel: float) -> str:
     ticket = state["ticket"]
     classification = state["classification"]
     # Only graph-retrieved cases, and only the top few: a tool search's hits are already in its
@@ -183,8 +182,12 @@ def _context_block(state: AgentState) -> str:
         c for c in state.get("retrieved_cases", []) if not c.query_label.startswith("tool:")
     ][:PROMPT_CASES]
 
+    # `relevant` is the same cut the evidence check applies (similarity >= tau_rel). Stating it
+    # lets the model cluster exactly the cases the check will weigh; left to guess, it
+    # clustered only the one case it cited (D22).
     cases_block = "\n\n".join(
-        f"[{c.case_id}] source={c.source} subject={c.subject!r} answer_class={c.answer_class} "
+        f"[{c.case_id}] relevant={'yes' if c.similarity >= tau_rel else 'no'} source={c.source} "
+        f"subject={c.subject!r} answer_class={c.answer_class} "
         f"cluster_size={c.cluster_size} similarity={c.similarity:.2f}\n"
         f"problem: {c.body_snippet[:PROMPT_SNIPPET_CHARS]}\n"
         f"historical answer: {c.answer_snippet[:PROMPT_SNIPPET_CHARS]}"

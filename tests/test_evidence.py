@@ -83,3 +83,11 @@ def test_enrich_orders_by_stance_then_cluster_size_then_similarity(conn):
     entries, _ = enrich(items, [], conn)
     # both "supports" (HF-3 cluster_size=8, HF-2 cluster_size=3) sort before the one "contradicts" (HF-1)
     assert [e.case_id for e in entries] == ["HF-3", "HF-2", "HF-1"]
+
+
+def test_enrich_keeps_one_entry_per_case_id(conn):
+    # D23: a model cited the same case twice, and the duplicate crashed persist_case after acceptance.
+    items = [EvidenceItem(case_id="HF-1", summary="first", stance="supports"),
+             EvidenceItem(case_id="HF-1", summary="again", stance="contradicts")]
+    entries, errors = enrich(items, [], conn)
+    assert [(e.case_id, e.summary) for e in entries] == [("HF-1", "first")] and errors == []

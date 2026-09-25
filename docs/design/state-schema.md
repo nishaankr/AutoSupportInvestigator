@@ -1,6 +1,7 @@
 # State Schema — LangGraph `AgentState`
 
-> **Status:** Draft v1 · defines every state field, its reducer, the checkpointer, and the `thread_id` scheme.
+> **Status:** v2 · reconciled with `graph/state.py` at CP8. Defines every state field, its
+> reducer, the checkpointer, and the `thread_id` scheme.
 > **Companion doc:** `graph-design.md` (node names and counters referenced below).
 > **Working assumptions:** Python 3.11+, LangGraph 1.x, Pydantic v2, SQLite checkpointer via `langgraph-checkpoint-sqlite`.
 
@@ -43,8 +44,8 @@ Legend: **R** = reducer (`—` = overwrite) · **Writer** = the node(s) allowed 
 ### 2.4 Triage
 | Field | Type | R | Writer | Notes |
 |---|---|---|---|---|
-| `classification` | `Classification \| None` | — | `triage` (may be revised by `investigate`) | queue, type, priority, tags, rationale, `neighbor_agreement` |
-| `active_skills` | `list[str]` | — | `triage` | e.g. `["investigation", "billing"]` |
+| `classification` | `Classification \| None` | — | `triage` | queue, type, priority, tags, rationale, `neighbor_agreement`. Since D19 a similarity/cluster-weighted vote over the neighbours' dataset labels, not a model call. *v1 said "may be revised by `investigate`"; nothing revises it (the optional `update_classification` tool was never built).* |
+| `active_skills` | `list[str]` | — | `triage` | Optional skills layered on `investigation`: today only `["escalation"]` or `[]`, chosen by rule (D19) |
 
 ### 2.5 Retrieval
 | Field | Type | R | Writer | Notes |
@@ -58,7 +59,8 @@ Legend: **R** = reducer (`—` = overwrite) · **Writer** = the node(s) allowed 
 |---|---|---|---|---|
 | `hypothesis` | `Hypothesis \| None` | — | `investigate` | The current best explanation, with supporting and contradicting case IDs |
 | `evidence` | `list[EvidenceEntry]` | — | `investigate` | The curated evidence list. It is **replaced** each round rather than appended, because it's the model's current judgement. The model emits `EvidenceItem` (`case_id`, `summary`, `stance`); `investigate` enriches each into an `EvidenceEntry` with `source`, `subject`, `answer_class`, `cluster_size` and `similarity` from SQLite and `retrieved_cases` before writing state. Full definition in `output-schema.md` §3. |
-| `evidence_assessment` | `EvidenceAssessment \| None` | — | `assess_evidence` | verdict, metrics, clusters, missing slots, `next_action` |
+| `findings` | `Findings \| None` | — | `investigate` | The arguments of the round's `submit_findings` call: hypothesis, evidence, clusters, missing slots, clarification question, human-action flag, the model's reason (D19). Replaced each round. |
+| `evidence_assessment` | `EvidenceAssessment \| None` | — | `assess_evidence` | verdict, metrics, clusters, missing slots (code-filtered, D20), `next_action`, and `reason` — the **code's** explanation of the verdict (D22) |
 | `tool_calls_this_round` | `int` | — | `tools` (+n), and reset to 0 when a new round starts | Loop A counter |
 | `tool_log` | `list[ToolCallRecord]` | `operator.add` | `tools` | name, args, duration, ok/error. Used by LangSmith tool-usage evals. |
 

@@ -1,9 +1,7 @@
-"""Local sentence-transformers wrapper (architecture.md §2, default BAAI/bge-small-en-v1.5).
+"""The local embedding model (default BAAI/bge-small-en-v1.5) — free, offline, deterministic.
 
-Built here at CP1 rather than CP2: `ingest/cluster.py` needs embeddings for every English
-record (not just canonicals) to cluster, and `ingest/index.py` needs them to upsert
-canonicals into Chroma, so ingest cannot run without this module existing first. CP2 adds
-`rag/dense.py` (query-time similarity search) on top of it; this module is unchanged by that.
+Used at ingest (to cluster every record and index the canonicals) and at query time (to embed
+the ticket). Loaded once, on first use.
 """
 
 from __future__ import annotations

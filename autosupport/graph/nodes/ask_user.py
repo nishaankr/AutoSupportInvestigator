@@ -1,14 +1,13 @@
-"""Node 10: `ask_user` — `interrupt()` #1: clarification (graph-design.md §7.1, §7.3).
+"""Node 10: `ask_user` — pauses the graph to ask the customer a question.
 
-What runs before `interrupt()`: only `build_payload`, a pure read of the checkpointed
-`pending_question`, `ticket_id` and `evidence_assessment.missing_slots`. No LLM call, no DB
-write, no tool call. On resume LangGraph re-executes this node from the top, so anything before
-`interrupt()` runs twice — and this is safe because that code is a pure function of the
-checkpoint: it rebuilds the identical payload, and the user is shown exactly the question they
-answered. The question itself was generated upstream in `assess_evidence`, and the
-`awaiting_user` write happened there too (graph-design.md §7.4).
+LangGraph re-runs an interrupt node from the top when it resumes, so everything before
+`interrupt()` must be safe to run twice. Here that's only `build_payload`, which reads the
+checkpoint and nothing else: no model call, no database write. The resumed run therefore shows
+exactly the question the customer answered.
 
-After `interrupt()` returns, everything is a state update — no side effects either.
+The question was written earlier — by the investigator in `submit_findings`, then filtered by
+`assess_evidence`, which also marked the case `awaiting_user`. After the answer arrives this
+node only updates state.
 """
 
 from __future__ import annotations

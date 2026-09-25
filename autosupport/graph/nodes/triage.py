@@ -86,7 +86,7 @@ def triage(state: AgentState) -> dict:
 
 def _neighbor_agreement(retrieved: list[RetrievedCase]) -> float:
     """Unweighted share of the initial retrieval round held by its modal queue
-    (state-schema.md §2.4; F4 in the CP3 plan)."""
+    (state-schema.md §2.4). Recorded for the output; the verdict no longer uses it (D21)."""
     if not retrieved:
         return 0.0
     counts = Counter(c.queue for c in retrieved if c.queue)

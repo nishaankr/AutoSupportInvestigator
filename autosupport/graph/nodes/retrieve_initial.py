@@ -1,9 +1,10 @@
-"""Node 3: `retrieve_initial` (graph-design.md) — broad semantic search over the whole
-index, no metadata filters, k=10. Runs in parallel with `load_memory`.
+"""Node 3: `retrieve_initial` — one broad hybrid search with the ticket itself as the query:
+no filters, top 10, over dataset and accepted agent-resolved cases alike. Runs alongside
+`load_memory`.
 
-The query *is* the ticket text, so `similarity` from the search is already anchored to the
-ticket — no re-anchoring needed here (compare `retrieve_variant`, `tools`).
-`rag/queries.search` only reads `dataset_tickets` until CP6 indexes agent-resolved cases.
+Because the query is the ticket, the similarities it returns are already similarity *to the
+ticket*; the nodes that search with other text (`retrieve_variant`, `tools`) have to
+re-anchor theirs.
 """
 
 from __future__ import annotations

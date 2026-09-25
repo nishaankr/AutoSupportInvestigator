@@ -43,12 +43,17 @@ def _classify_all(records: pd.DataFrame) -> pd.DataFrame:
 
     residue = records.index[records["answer_class"] == "residue"]
     if len(residue):
-        # method="json_schema": decisions.md D13 (the default is unreliable for these models)
+        from langsmith import tracing_context
+
         llm = structured(fast_llm(), classify.ResidueClassification)
-        for idx in residue:
-            result = classify.classify_residue(records.at[idx, "answer"], llm)
-            records.at[idx, "answer_class"] = result.answer_class
-            records.at[idx, "answer_class_source"] = "llm"
+        # Not traced: a full ingest makes ~2,400 of these calls, each would count as its own
+        # LangSmith trace, and one ingest used up the free tier's 5,000-a-month (D22). Tracing
+        # is for agent runs and evals, not a batch job.
+        with tracing_context(enabled=False):
+            for idx in residue:
+                result = classify.classify_residue(records.at[idx, "answer"], llm)
+                records.at[idx, "answer_class"] = result.answer_class
+                records.at[idx, "answer_class_source"] = "llm"
     return records
 
 
@@ -109,13 +114,18 @@ def _upsert_chroma(records: pd.DataFrame, embed_vectors: np.ndarray, rebuild: bo
     collection = client.get_or_create_collection(COLLECTION_NAME, metadata={"hnsw:space": "cosine"})
 
     canonical_idx = np.where(records["is_canonical"].to_numpy())[0]
-    collection.upsert(
-        ids=canonical["case_id"].tolist(),
-        embeddings=embed_vectors[canonical_idx].tolist(),
-        documents=canonical["embed_text"].tolist(),
-        metadatas=[_chroma_metadata(row) for _, row in canonical.iterrows()],
-    )
-    return canonical["case_id"].tolist()
+    ids = canonical["case_id"].tolist()
+    embeddings = embed_vectors[canonical_idx].tolist()
+    documents = canonical["embed_text"].tolist()
+    metadatas = [_chroma_metadata(row) for _, row in canonical.iterrows()]
+    # Chroma caps a single upsert (5,461 here). A `--limit` ingest never reaches it, and the
+    # full corpus (~11.9K canonicals) failed on it after 38 minutes of work (D22) — so batch.
+    step = client.get_max_batch_size()
+    for start in range(0, len(ids), step):
+        end = start + step
+        collection.upsert(ids=ids[start:end], embeddings=embeddings[start:end],
+                          documents=documents[start:end], metadatas=metadatas[start:end])
+    return ids
 
 
 def run(limit: int | None = None, rebuild: bool = False) -> IngestReport:

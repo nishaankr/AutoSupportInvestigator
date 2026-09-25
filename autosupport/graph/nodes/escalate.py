@@ -1,15 +1,13 @@
-"""Node 12: `escalate` (graph-design.md, output-schema.md §2.1) — pure Python, no model call.
+"""Node 12: `escalate` — builds the handoff to a person, in code, with no model call.
 
-Everything a handoff needs is already in state: why it escalates (the trigger and matched
-rule), what the investigator concluded (hypothesis, cited evidence, including what
-contradicts it), what the customer told us, and what is still missing. So the target queue,
-reason, handoff summary, analysis and holding reply are assembled from those fields rather
-than re-written by a model (decisions.md D19). A template can only cite cases that are in
-`evidence`, so the handoff can't invent a fix or a case.
+Everything a good handoff needs is already in state: why it's escalating (the trigger and any
+matched rule), what the investigator found (hypothesis, evidence, including what contradicts
+it), what the customer said, and what's still missing. Assembling it from those fields is
+cheaper than asking a model to rewrite them, and a template can only cite cases that are in
+the evidence, so it can't invent a fix or a case (decisions.md D19).
 
-`trigger` follows output-schema.md §2.1's precedence and is captured here into
-`escalation_trigger` rather than recomputed at `persist_case`: a later `verify` pass over this
-very draft would otherwise change what the precedence computes (D15 F4).
+The trigger is decided here and saved, rather than recomputed when the case is persisted:
+the `verify` pass over this very draft would otherwise change what the precedence rules pick.
 """
 
 from __future__ import annotations

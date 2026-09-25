@@ -88,6 +88,11 @@ def mark_indexed(conn: sqlite3.Connection, ticket_id: str) -> None:
     conn.commit()
 
 
+def mark_unindexed(conn: sqlite3.Connection, ticket_id: str) -> None:
+    conn.execute("UPDATE cases SET indexed_at = NULL WHERE ticket_id = ?", (ticket_id,))
+    conn.commit()
+
+
 def indexed_ticket_ids(conn: sqlite3.Connection) -> list[str]:
     return [r[0] for r in conn.execute("SELECT ticket_id FROM cases WHERE indexed_at IS NOT NULL").fetchall()]
 

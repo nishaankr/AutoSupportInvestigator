@@ -16,3 +16,7 @@ draft is allowed to tell the customer what's being looked into instead of a fix.
 
 `analysis` is written for a support agent reviewing your work: the hypothesis, how the
 evidence agreed or conflicted, what was ruled out. `resolution` is the customer-facing reply.
+
+The reply is sent as written, so it must be complete: no placeholders such as `[Your Name]` or
+`[link]`, and no sign-off with an invented name. Don't name documents, portals or tools that
+the evidence doesn't mention — "our documentation" is fine, an invented page title isn't.

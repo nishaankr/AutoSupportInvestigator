@@ -26,7 +26,7 @@ def _holdout_ids() -> set[str]:
     if not HOLDOUT_PATH.exists():
         return set()
     lines = HOLDOUT_PATH.read_text(encoding="utf-8").splitlines()
-    return {json.loads(line)["example_id"] for line in lines if line.strip()}
+    return {case_id for line in lines if line.strip() for case_id in json.loads(line)["holdout_ids"]}
 
 
 def _snapshot_path() -> Path:

@@ -1,14 +1,13 @@
-"""Deterministic confidence formula (output-schema.md §4, decisions.md D12).
+"""The confidence score: computed from the evidence, never reported by a model
+(output-schema.md §4, decisions.md D12).
 
-Written and unit-tested at CP3 (against the §4.7 worked examples A-E) even though nothing
-in the CP3 graph calls it yet — CP3 has no `verify` node, and output-schema.md §4.5 says
-confidence is computed *only* in `verify`, once per attempt, with the `EvidenceAssessment`
-that only `assess_evidence` (CP5) produces. Wiring this into the graph is CP5's job; the
-formula itself has no such dependency, so there's no reason to defer writing it.
+Only `verify` calls this, once per draft. Roughly: how much resolution-class evidence
+supports the answer (weighted by how many historical tickets each case stands for), how much
+contradicts it, and how close the supporting cases are to this ticket — minus a penalty per
+missing fact, and capped when the evidence was thin, conflicting or failed the check.
 
-Every constant below defines the scale itself (output-schema.md §4.4 "Constants"), so a
-change to one changes the meaning of every stored value — they live here as module
-constants, not in config.py, and a change should go through code review.
+The constants below *define* the scale, so changing one changes the meaning of every stored
+score. That's why they live here as code, not in config.
 """
 
 from __future__ import annotations
@@ -40,9 +39,8 @@ def cluster_weight(cluster_size: int) -> float:
 
 
 def _substantive(entry: EvidenceEntry) -> bool:
-    # resolution-only (output-schema.md §4.3, Decision 3): a clarification_request shows
-    # someone asked a question, an escalation/handoff carries no grounded fix, and an open
-    # customer case (answer_class=None) has no answer yet. None of the three add weight.
+    # Only resolutions count: a clarification request shows someone asked a question, an
+    # escalation carries no fix, and an open customer case has no answer yet.
     return entry.answer_class == "resolution"
 
 
@@ -52,8 +50,9 @@ def compute_confidence(
     verification_passed: bool | None,
     tau_rel: float,
 ) -> Confidence:
-    """`verification_passed=None` means "before the check" (output-schema.md §4.5 step 1) —
-    the `verification_failed` cap never applies in that case."""
+    """`verification_passed=None` means the check hasn't run yet: `verify` computes the band
+    first (so its claim check knows what wording the evidence allows), then again with the
+    outcome, which applies the cap on failure."""
     supports = [e for e in evidence if e.stance == "supports"]
     contradicts = [e for e in evidence if e.stance == "contradicts"]
 
@@ -63,9 +62,8 @@ def compute_confidence(
     support = 1.0 - math.exp(-w_s / K)
     agreement = w_s / (w_s + w_c) if (w_s + w_c) > 0 else 0.0
 
-    # Relevance checks whether the cases marked "supports" actually match the ticket, on the
-    # dense-similarity scale — independent of the substantive gate above (output-schema.md
-    # §4.4: "That signal is independent of the model's stance judgements").
+    # Relevance asks whether the supporting cases really resemble this ticket, from their
+    # measured similarity — a check on the model's "supports" judgements, not a repeat of them.
     ranked_similarities = sorted(
         (e.similarity for e in supports if e.similarity is not None), reverse=True
     )[:3]

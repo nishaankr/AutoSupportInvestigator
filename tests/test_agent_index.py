@@ -79,3 +79,47 @@ def test_dataset_fts_rebuild_keeps_agent_rows(conn):
     dataset_repo.rebuild_fts(conn)
     ids = {r[0] for r in conn.execute("SELECT case_id FROM dataset_tickets_fts").fetchall()}
     assert ids == {"T-20260924-cccccc"}
+
+
+def test_chroma_upsert_is_batched_under_the_client_limit(tmp_path, monkeypatch):
+    # D22: the full corpus (~11.9K canonicals) exceeded Chroma's 5,461-item upsert limit.
+    import pandas as pd
+    from autosupport.config import settings
+    from autosupport.ingest import index
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    calls: list[int] = []
+
+    class _Collection:
+        def upsert(self, ids, **_):
+            calls.append(len(ids))
+
+    class _Client:
+        def __init__(self, path): pass
+        def list_collections(self): return []
+        def get_or_create_collection(self, *a, **k): return _Collection()
+        def get_max_batch_size(self): return 4
+
+    import chromadb
+    monkeypatch.setattr(chromadb, "PersistentClient", _Client)
+    n = 10
+    records = pd.DataFrame({
+        "case_id": [f"HF-{i}" for i in range(n)], "is_canonical": [True] * n, "embed_text": ["t"] * n,
+        "source": ["dataset"] * n, "queue": ["q"] * n, "type": ["t"] * n, "priority": ["low"] * n,
+        "answer_class": ["resolution"] * n, "cluster_size": [1] * n, "version": [1] * n,
+        **{f"tag_{i}": [None] * n for i in range(1, 9)},
+    })
+    ids = index._upsert_chroma(records, np.zeros((n, 4), dtype=np.float32), rebuild=False)
+    assert calls == [4, 4, 2] and len(ids) == n
+
+
+def test_unindex_takes_a_case_back_out_of_the_corpus(conn, monkeypatch):
+    # The eval's memory example indexes a resolution to test retrieval, then removes it (D23).
+    deleted: list[str] = []
+    monkeypatch.setattr(agent_index.dense, "delete", lambda cid: deleted.append(cid))
+    _case(conn, "T-20260924-dddddd")
+    agent_index.index_agent_case(conn, "T-20260924-dddddd")
+    agent_index.unindex_agent_case(conn, "T-20260924-dddddd")
+    assert deleted == ["T-20260924-dddddd"]
+    assert conn.execute("SELECT COUNT(*) FROM dataset_tickets_fts WHERE case_id = 'T-20260924-dddddd'").fetchone()[0] == 0
+    assert cases_repo.get(conn, "T-20260924-dddddd")["indexed_at"] is None

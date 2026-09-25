@@ -1,6 +1,6 @@
 # RAG Design — Ingestion & Retrieval
 
-> **Status:** Draft v2 (full rewrite). Every number below has a stated reason and is
+> **Status:** v2 (full rewrite), with post-build divergences listed in §12. Every number below has a stated reason and is
 > reproducible from `scripts/rag_calibration.py`, whose output is committed at
 > `docs/rag-calibration-output.txt`. Where a choice was contested, the losing argument is
 > recorded as a **Trade-off note** rather than omitted.
@@ -565,7 +565,7 @@ full dense → BM25 → RRF → MMR pipeline independently, with final k=8.
 |---|---|---|---|
 | **V1** `clarification_keywords` | `clarifications` is non-empty | Ticket text plus the latest clarification answer; the answer's named entities become quoted BM25 phrases | The customer just supplied the one fact retrieval was missing — use it precisely, not just append it to a generic query |
 | **V2** `resolution_only` | Fewer than 2 relevant `answer_class="resolution"` cases held so far | Ticket text, filtered to `answer_class = 'resolution'` | §5.3: only ~12% of the corpus is resolution-class. An unfiltered top-10 averages roughly one resolution case — nowhere near the "≥3 relevant, ≥2 in the dominant cluster" bar `graph-design.md` §5 sets for sufficiency |
-| **V3** `hypothesis_rewrite` | Always | The fast tier writes a `QueryRewrite{text, keywords≤6}` from the current hypothesis | The ticket's literal wording and the actual underlying hypothesis often diverge once investigation has narrowed things down |
+| **V3** `hypothesis_rewrite` | Always | The hypothesis itself (`root_cause_category: statement`) as the query; the entities in it and in the evidence summaries (the `ENTITY` pattern, ≤6) become quoted BM25 phrases. *v1 had the fast tier write a `QueryRewrite`; D19 made it Python — the hypothesis already states the problem in the investigator's terms.* | The ticket's literal wording and the actual underlying hypothesis often diverge once investigation has narrowed things down |
 | **V4** `queue_filtered` | Neighbour top-queue share < 0.5, or triage disagrees with the neighbour majority | Ticket text filtered to the classified `queue` | §4's own agreement table shows same-queue pairs barely outscore random pairs in raw dense similarity (§9) — a queue filter does the separating work the vector space alone won't |
 
 ---
@@ -588,3 +588,35 @@ in full in the commit that lands alongside this file):
   `τ_rel = 0.76`), §4.7 (worked-example table re-expressed against the new similarity band).
 - `graph-design.md` §5 and §9: `τ_rel` default 0.55 → 0.76.
 - `autosupport/config.py`: `tau_rel` default 0.55 → 0.76.
+
+---
+
+## 12. What changed after this doc was written (CP5–CP8)
+
+Divergences between the design above and the built retrieval, each with the decision that
+caused it:
+
+- **Similarity is anchored to the ticket.** `rag.queries.search` reports cosine to *its own*
+  query; graph nodes merging results from a rewrite or a tool search re-anchor it to the
+  ticket (`graph/retrieval.reanchor`) so `merge_cases` and `τ_rel` compare like with like
+  (D15 F1).
+- **`where` filters reach both arms.** V2/V4's metadata filter originally constrained only
+  the dense arm; `lexical.search` gained a whitelisted `where` and forced `phrases` (D15).
+- **Agent-resolved cases are retrieved through the same path.** `queries._fetch_rows`
+  resolves `T-` ids from `cases` (it silently dropped them before), and every result carries
+  `source` (D16). `rebuild_fts` replaces only `source='dataset'` rows, and `ingest --rebuild`
+  re-indexes accepted agent cases, so re-ingesting never loses what was learned (D16).
+- **The eval holdout is never indexed.** `load.load_ingest_subset` drops the 15 eval tickets
+  after the `--limit` sample, so the agent can't retrieve an eval ticket's own answer (D17).
+- **What the model sees is budgeted.** `investigate` shows the top 12 graph-retrieved cases
+  with 300-character snippets, marked `relevant=yes/no` at `τ_rel`; tool search results are
+  trimmed the same way; full records stay one `get_ticket_by_id` call away (D18, D22). State
+  keeps the 600-character snippets of §7.
+- **No reranker.** An earlier architecture draft mentioned reranking to recover precision; none
+  was built. BM25 + RRF + MMR is the whole pipeline.
+- **The real full ingest gives 11,903 canonicals, not the 12,217 measured in §4.** It was
+  measured at CP8, on 23,786 rows (the 15 eval tickets are held out). The most likely cause:
+  the guard only merges answers of the same class, and ingest labels the ~10% residue with an
+  LLM, where the calibration harness doesn't, so some borderline merges come out differently.
+  The distribution is still dominated by small clusters: 5,805 singletons, 4,930 of size 2–3,
+  34 of 16+.

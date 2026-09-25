@@ -1,7 +1,8 @@
-"""Enrichment: model-authored `EvidenceItem` -> code-authored `EvidenceEntry`
-(output-schema.md §3.2). At the full design this lives inside `investigate`; at CP3
-`resolve` calls it directly (docs/project/decisions.md CP3 entry, Q2) — the function itself
-doesn't change when `investigate` lands at CP4.
+"""Turns the evidence a model cites into facts code can trust (output-schema.md §3.2).
+
+The model only says *which* case and *what stance*. Everything else — the case's subject, its
+answer class, how many tickets it stands for, where it came from — is looked up here, so a
+model can't misreport it, and a case id that doesn't exist is dropped with an error.
 """
 
 from __future__ import annotations
@@ -25,7 +26,13 @@ def enrich(
     similarity_by_id = {c.case_id: c.similarity for c in retrieved_cases}
     entries: list[EvidenceEntry] = []
     errors: list[str] = []
+    seen: set[str] = set()
     for item in items:
+        # A model sometimes lists the same case twice; the final CaseResult rejects duplicate
+        # ids, which crashed persist_case after the customer had accepted (D23). First one wins.
+        if item.case_id in seen:
+            continue
+        seen.add(item.case_id)
         looked_up = _lookup(conn, item.case_id)
         if looked_up is None:
             errors.append(f"evidence cites unknown case_id {item.case_id!r}; dropped")
@@ -70,10 +77,9 @@ def _lookup(conn: sqlite3.Connection, case_id: str) -> tuple[str, str, str | Non
 
 
 def evidence_context(evidence: list[EvidenceEntry], retrieved: list[RetrievedCase], conn: sqlite3.Connection) -> str:
-    """The historical text behind each evidence entry, for drafting (`resolve`, `escalate`)
-    and checking (`verify`). An `EvidenceEntry` carries `subject` but not the answer itself,
-    so it's read from `retrieved_cases`, or straight from SQLite for evidence sourced
-    elsewhere (e.g. customer history)."""
+    """The historical problem and answer behind each evidence entry, as prompt text for
+    `resolve` (drafting) and `verify` (checking). Taken from the retrieved snippets when the
+    case was retrieved, otherwise read from SQLite (e.g. a case from the customer's history)."""
     if not evidence:
         return "(no evidence gathered)"
     by_id = {c.case_id: c for c in retrieved}

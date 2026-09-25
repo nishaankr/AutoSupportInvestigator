@@ -33,6 +33,10 @@ def upsert(case_id: str, vector: np.ndarray, document: str, metadata: dict) -> N
     _collection().upsert(ids=[case_id], embeddings=[vector.tolist()], documents=[document], metadatas=[metadata])
 
 
+def delete(case_id: str) -> None:
+    _collection().delete(ids=[case_id])
+
+
 @dataclass
 class DenseHit:
     case_id: str

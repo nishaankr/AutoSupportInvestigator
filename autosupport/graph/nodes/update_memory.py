@@ -1,9 +1,10 @@
-"""Node 16: `update_memory` (graph-design.md, memory-design.md §4) — fast tier.
+"""Node 16: `update_memory` — decides what's worth remembering about this customer.
 
-The model proposes a `MemoryUpdate`; `graph/memory.apply_update` enforces the write policy
-(W1-W6) in code before anything is stored. Runs in parallel with `index_case` after
-`persist_case`, for every outcome (W4). Writes no graph state — the `customers` row is the
-only output, so the parallel branch needs no reducer.
+The model only proposes a `MemoryUpdate`; `graph/memory.apply_update` applies the write policy
+(W1–W6, memory-design.md §4) in code, and only what survives is stored. A regex check runs
+first, so the model is called only when the customer said something the policy could keep.
+It runs for every outcome, alongside `index_case`. A failed extraction is recorded in
+`errors`, which has a reducer, and never fails the ticket: the case is already saved.
 """
 
 from __future__ import annotations
@@ -50,13 +51,18 @@ def update_memory(state: AgentState) -> dict:
             + (f"\nEscalated because: {result.escalation.reason}" if result.escalation.required else "")
         )
         current = profile.model_dump(exclude={"provenance", "customer_id"}) if profile else "(empty)"
+        errors: list[str] = []
+        update = MemoryUpdate(reasoning="skipped: no candidate facts in the customer's text")
         if has_memory_candidates(source):
-            update: MemoryUpdate = structured(fast_llm(), MemoryUpdate).invoke([
-                ("system", SYSTEM),
-                ("user", f"CUSTOMER'S OWN TEXT:\n{source}\n\n{outcome}\n\nCurrent profile: {current}"),
-            ])
-        else:  # nothing W1-W3 could keep: skip the call, still recompute flags (W6)
-            update = MemoryUpdate(reasoning="skipped: no candidate facts in the customer's text")
+            try:
+                update = structured(fast_llm(), MemoryUpdate).invoke([
+                    ("system", SYSTEM),
+                    ("user", f"CUSTOMER'S OWN TEXT:\n{source}\n\n{outcome}\n\nCurrent profile: {current}"),
+                ])
+            except Exception as exc:  # external API boundary
+                # The case is already persisted; losing one memory extraction must not fail
+                # the ticket. Flags (W6) are still recomputed below.
+                errors.append(f"update_memory: extraction failed, profile facts unchanged: {exc}"[:300])
         since = datetime.now(timezone.utc) - timedelta(days=REPEAT_UNRESOLVED_DAYS)
         memory = apply_update(
             profile, state["customer_id"], update, source, state["ticket_id"],
@@ -65,4 +71,5 @@ def update_memory(state: AgentState) -> dict:
         customers_repo.upsert(conn, memory)
     finally:
         conn.close()
-    return {}
+    # `errors` has an `operator.add` reducer, so writing it alongside `index_case` is safe.
+    return {"errors": errors} if errors else {}

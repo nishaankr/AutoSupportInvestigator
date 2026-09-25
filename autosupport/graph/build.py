@@ -1,7 +1,5 @@
-"""StateGraph wiring and `compile(checkpointer)` — the full topology of graph-design.md §2
-(every router in routers.py, every loop counter-bounded), ending in the parallel
-`index_case | update_memory` fan-out after `persist_case`.
-"""
+"""Wires the nodes into the graph of graph-design.md §2 and compiles it with the SQLite
+checkpointer. Read `build_graph()` top to bottom to see the whole flow."""
 
 from __future__ import annotations
 
@@ -36,11 +34,9 @@ from autosupport.graph.state import CHECKPOINTED_MODELS, AgentState, InputState,
 
 
 def _allowed_msgpack_modules() -> list[tuple[str, str]]:
-    """Every Pydantic type that can appear in `AgentState`, named explicitly for the
-    checkpointer's serde allowlist. Without this, `SqliteSaver` refuses to deserialise them
-    on reload (state-schema.md §4 "Implementation notes"; the risk noted in the CP3 plan) —
-    tested directly against this project's own package name before adopting it, since the
-    exact spelling (module, qualname) is what the allowlist matches, not a module prefix."""
+    """The checkpointer only restores Pydantic types it has been told about; without this
+    list every resumed ticket would fail to load. It matches exact (module, class) pairs,
+    not a package prefix, so each model is listed individually (`CHECKPOINTED_MODELS`)."""
     return [(model.__module__, model.__qualname__) for model in CHECKPOINTED_MODELS]
 
 

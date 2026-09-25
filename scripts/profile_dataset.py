@@ -1,6 +1,6 @@
-"""CP1 profiling — run once against the real dataset, ahead of writing ingest code.
-Not part of the ingest pipeline (see ingest/load.py, built later): this is throwaway-
-reusable tooling, kept because re-profiling after a dataset update is cheap this way.
+"""Dataset profiling — what the corpus looks like (languages, lengths, labels, duplicates).
+Run before the ingest code was written, and kept because re-profiling after a dataset update
+is cheap. Not part of the ingest pipeline (that's `autosupport ingest`).
 
 Snapshots the English subset to data/tickets_en.parquet (git-ignored, offline reuse —
 `datasets` also caches the HF download itself, so re-running this costs no network call)

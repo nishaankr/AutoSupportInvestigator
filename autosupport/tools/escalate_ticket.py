@@ -1,7 +1,8 @@
-"""`escalate_ticket` (tools-and-skills.md §1) — CP4 scope: advisory only. It lets the model
-formally flag "this needs a human" mid-investigation, logged in `tool_log`. It does not
-itself route the graph to an escalation outcome; `assess_evidence`/`escalate` (CP5) own that
-decision."""
+"""`escalate_ticket` — lets the investigator flag, mid-investigation, that a person is needed.
+
+The tool itself only acknowledges. The flag matters afterwards: a successful call counts as
+the `action_beyond_agent` escalation rule when `assess_evidence` decides the route, so the
+decision stays in code rather than with whichever tool the model happened to call."""
 
 from __future__ import annotations
 

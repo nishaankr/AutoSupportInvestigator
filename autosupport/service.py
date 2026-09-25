@@ -1,6 +1,7 @@
-"""The UI seam (CLAUDE.md). Returns Pydantic objects, never formatted strings —
-cli.py is a pure renderer over what this module returns. This is the only module
-cli.py is allowed to call."""
+"""Everything a user interface can do, as plain functions returning Pydantic objects.
+
+The CLI only renders what these return, and it never talks to the graph or the stores
+directly. That keeps a future web frontend a matter of calling the same functions."""
 
 from __future__ import annotations
 
@@ -54,8 +55,8 @@ class SearchHit(BaseModel):
 
 
 def search(text: str, k: int = 10, queue: str | None = None) -> list[SearchHit]:
-    """CP2 temporary command (checkpoints.md) — exercises rag/queries.py end to end so hybrid
-    retrieval can be verified against the real corpus before the graph exists to call it."""
+    """Run hybrid retrieval on its own, outside the graph — handy for seeing why a ticket
+    did or didn't find a case."""
     from autosupport.rag.queries import search as run_search
 
     where = {"queue": queue} if queue else None
@@ -104,17 +105,17 @@ class CaseListItem(BaseModel):
 
 
 def _new_ticket_id() -> str:
-    """`T-YYYYMMDD-<6 hex>` (case-persistence.md §6). Generated here, not by `intake` —
-    `thread_id` has to exist before the graph can be invoked at all."""
+    """`T-YYYYMMDD-<6 hex>`. Made here rather than in `intake`, because the graph can't be
+    invoked without a thread id, and the thread id contains the ticket id."""
     return f"T-{datetime.now(timezone.utc):%Y%m%d}-{secrets.token_hex(3)}"
 
 
 def _run_config(
     thread_id: str, ticket_id: str, customer_id: str, require_acceptance: bool | None = None
 ) -> dict:
-    """Run policy travels in `config["configurable"]` (graph-design.md §9), so a resume uses
-    exactly the limits the ticket started with. `metadata` tags every LangSmith trace with
-    the ticket's identity, so a trace (or an eval score) can be found from a ticket id."""
+    """The per-run settings. Loop limits travel in `configurable`, so a resume runs under the
+    same limits the ticket started with; `metadata` stamps every LangSmith trace with the
+    ticket's identity, so any trace or eval score can be traced back to a ticket id."""
     from autosupport.config import settings
 
     return {
@@ -134,7 +135,7 @@ def _run_config(
 
 
 def _outcome(ticket_id: str, thread_id: str) -> TicketOutcome:
-    """Built from the checkpoint, the one source that knows about a pause."""
+    """Read from the checkpoint, since only the checkpoint knows whether a run is paused."""
     from autosupport.graph.build import compiled_graph
 
     snap = compiled_graph().get_state({"configurable": {"thread_id": thread_id}})
@@ -157,8 +158,9 @@ def new_ticket(
     customer_id: str, subject: str, body: str,
     thread_id: str | None = None, require_acceptance: bool | None = None,
 ) -> TicketOutcome:
-    """`thread_id` / `require_acceptance` are overridden only by the offline eval
-    (evaluation-design.md §3: `eval:{run_id}:{example_id}`, no acceptance step)."""
+    """Start a ticket and run it until it finishes or pauses. The offline eval is the only
+    caller that overrides `thread_id` (to `eval:{run_id}:{example_id}`) and switches the
+    acceptance step off."""
     from autosupport.graph.build import compiled_graph
     from autosupport.graph.state import InputState, TicketInput
 
@@ -176,9 +178,9 @@ def new_ticket(
 def resume_ticket(
     ticket_id: str, answer: str | None = None, accept: bool = False, reject: str | None = None
 ) -> TicketOutcome:
-    """Resumes a paused ticket from its checkpoint. Validated at this boundary: the ticket
-    must exist and be `awaiting_user`, and the flag given must match what it is waiting for
-    (an answer for a clarification; accept or reject for a confirmation)."""
+    """Continue a paused ticket from its checkpoint — possibly in a brand-new process. The
+    input is checked here, at the edge: the ticket must exist and be waiting, and the caller
+    must give what it's waiting for (an answer to a question, or accept/reject)."""
     from langgraph.types import Command
 
     from autosupport.graph.build import compiled_graph
@@ -206,8 +208,8 @@ def resume_ticket(
                 raise ValueError(f"{ticket_id} is waiting for a decision: use exactly one of --accept / --reject")
             resume = {"accepted": True} if accept else {"accepted": False, "feedback": reject}
 
-        # Flip the row back here, not inside the interrupt node — interrupt nodes have no
-        # side effects (graph-design.md §7.3).
+        # The status flips back here rather than in the interrupt node: LangGraph re-runs an
+        # interrupt node from the top on resume, so it must not touch the database.
         cases_repo.set_status(conn, ticket_id, "investigating", pending_question=None)
     finally:
         conn.close()
@@ -237,7 +239,7 @@ def show(ticket_id: str) -> TicketOutcome:
 
 
 class MemoryView(BaseModel):
-    """What `load_memory` would give this customer's next ticket (memory-design.md §3)."""
+    """What this customer's next ticket would start with: their profile and earlier tickets."""
 
     customer_id: str
     profile: CustomerMemory | None
@@ -258,6 +260,70 @@ def memory(customer_id: str) -> MemoryView:
     return MemoryView(customer_id=customer_id, profile=profile, history=history)
 
 
+class TraceCase(BaseModel):
+    case_id: str
+    source: str
+    similarity: float
+    query_label: str
+    subject: str
+
+
+class TicketTrace(BaseModel):
+    """What one ticket's run retrieved, loaded and did — read from its checkpoint. Used by the
+    demo to show retrieval and memory at work."""
+
+    ticket_id: str
+    customer_id: str
+    indexed: bool
+    retrieved: list[TraceCase]
+    customer_profile: CustomerMemory | None
+    customer_history: list[CaseSummary]
+    tools_called: list[str]
+    evidence_ids: list[str]
+
+
+def ticket_trace(ticket_id: str) -> TicketTrace:
+    from autosupport.graph.build import compiled_graph
+    from autosupport.store import cases as cases_repo
+    from autosupport.store import db as store_db
+
+    conn = store_db.connect()
+    try:
+        row = cases_repo.get(conn, ticket_id)
+    finally:
+        conn.close()
+    if row is None:
+        raise ValueError(f"no such ticket: {ticket_id}")
+    values = compiled_graph().get_state({"configurable": {"thread_id": row["thread_id"]}}).values
+    return TicketTrace(
+        ticket_id=ticket_id, customer_id=row["customer_id"], indexed=row["indexed_at"] is not None,
+        retrieved=[TraceCase(case_id=c.case_id, source=c.source, similarity=round(c.similarity, 3),
+                             query_label=c.query_label, subject=c.subject)
+                   for c in values.get("retrieved_cases", [])],
+        customer_profile=values.get("customer_profile"),
+        customer_history=values.get("customer_history", []),
+        tools_called=[t.name for t in values.get("tool_log", [])],
+        evidence_ids=[e.case_id for e in values.get("evidence", [])],
+    )
+
+
+class DemoScenario(BaseModel):
+    title: str
+    passed: bool
+    lines: list[str]
+
+
+class DemoReport(BaseModel):
+    run_id: str
+    scenarios: list[DemoScenario]
+
+
+def run_demo() -> DemoReport:
+    from scripts.demo import run
+
+    return run()
+
+
 class EvalRow(BaseModel):
     example_id: str
     ticket_id: str | None
@@ -267,7 +333,8 @@ class EvalRow(BaseModel):
 
 
 class EvalSummary(BaseModel):
-    """One offline LangSmith experiment (evaluation-design.md) — not the in-graph `verify`."""
+    """One offline LangSmith experiment. Not to be confused with `verify`, which checks a
+    single draft inside the graph; this scores the whole system afterwards."""
 
     run_id: str
     experiment_name: str
@@ -282,7 +349,7 @@ def run_eval(dataset: str | None = None) -> EvalSummary:
     from evals import run as eval_run
     from evals.dataset import DEFAULT_DATASET
 
-    if settings.langsmith_api_key is None:  # fail fast, before any ticket runs (CLAUDE.md config rule)
+    if settings.langsmith_api_key is None:  # say so now, not after fifteen tickets have run
         raise ValueError("LANGSMITH_API_KEY is empty in .env — `autosupport eval` uploads to LangSmith")
 
     raw = eval_run.run(dataset or DEFAULT_DATASET)

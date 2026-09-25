@@ -1,14 +1,12 @@
-"""Node 14: `confirm_resolution` — `interrupt()` #2: acceptance (graph-design.md §7.2, §7.3).
+"""Node 14: `confirm_resolution` — pauses so the customer can accept or reject the answer.
 
-What runs before `interrupt()`: only `build_payload` — the resolution text, the confidence
-`value`/`band` and the cited case IDs, all pure reads of the checkpointed `draft`/`confidence`
-(cited IDs come from applying the `CITATION` regex to the resolution text, output-schema.md
-§3.4, never stored separately). No LLM, DB or tool. Re-executing it on resume rebuilds the same
-payload from the same checkpoint, so it is safe. The `awaiting_user` write was done by `verify`
-(the node that routes here), and the flip back to `investigating` on a rejection is done by
-`service.resume_ticket` before the graph is re-invoked.
+Same rule as `ask_user`: before `interrupt()` there is only `build_payload`, a pure read of the
+checkpointed draft and confidence (the cited ids are pulled from the resolution text itself),
+so re-running it on resume changes nothing. `verify` marked the case `awaiting_user` before
+routing here; `service.resume_ticket` flips it back.
 
-Resume value: `{"accepted": true}` or `{"accepted": false, "feedback": "..."}`.
+The resume value is `{"accepted": true}` or `{"accepted": false, "feedback": "..."}`. A
+rejection counts one revision and sends the feedback back to the investigator.
 """
 
 from __future__ import annotations

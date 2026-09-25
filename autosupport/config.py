@@ -1,10 +1,8 @@
-"""Single source of truth for environment and runtime configuration.
+"""All configuration, read once from `.env` and validated at startup.
 
-Never call `os.getenv` or `load_dotenv` anywhere else in the codebase (CLAUDE.md).
-Read values from the module-level `settings` instance instead. Import failures are
-fatal and clear: a missing or invalid `.env` raises at import time with a message
-naming the offending variable(s), rather than surfacing as a confusing error deep
-inside a graph node.
+Everything else reads the module-level `settings` object — nothing calls `os.getenv` or
+`load_dotenv`. A missing or invalid value stops the program at import with a message naming
+the variable, instead of failing later somewhere deep inside a graph node.
 """
 
 from __future__ import annotations
@@ -35,12 +33,14 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr | None = Field(default=None, validation_alias="ANTHROPIC_API_KEY")
     groq_api_key: SecretStr | None = Field(default=None, validation_alias="GROQ_API_KEY")
     langsmith_api_key: SecretStr | None = Field(default=None, validation_alias="LANGSMITH_API_KEY")
-    langsmith_tracing: bool = Field(default=True, validation_alias="LANGSMITH_TRACING")
+    # Off by default: ordinary runs aren't traced. `autosupport eval` and
+    # scripts/smoke_langsmith.py turn tracing on for themselves (decisions.md D23).
+    langsmith_tracing: bool = Field(default=False, validation_alias="LANGSMITH_TRACING")
     langsmith_project: str = Field(default="autosupport", validation_alias="LANGSMITH_PROJECT")
 
     # --- models (architecture.md §2.3) ---
     main_model: str = "groq:openai/gpt-oss-120b"
-    fast_model: str = "groq:openai/gpt-oss-20b"
+    fast_model: str = "groq:openai/gpt-oss-120b"
     # The offline-eval judge (evaluation-design.md §4) is configured separately from the tiers
     # under test, so swapping a tier's model never changes who grades it.
     judge_model: str = "groq:openai/gpt-oss-120b"
@@ -138,11 +138,9 @@ def _load_settings() -> Settings:
 
 settings = _load_settings()
 
-# LangSmith/LangChain tracing reads its config from the process environment, not from
-# pydantic-settings, which only parses .env into the object above. This is the one
-# place in the codebase that writes to os.environ — a write, not an os.getenv, and it
-# does not use load_dotenv, so it respects CLAUDE.md's rule. The Anthropic key is
-# passed explicitly to init_chat_model (llm.py) instead of being exported here.
+# LangSmith's tracer reads its settings from the process environment, not from this object,
+# so they're exported here — the only place that writes to os.environ. Model API keys are not
+# exported; llm.py hands each one straight to its client.
 os.environ["LANGSMITH_TRACING"] = "true" if settings.langsmith_tracing else "false"
 os.environ["LANGSMITH_PROJECT"] = settings.langsmith_project
 if settings.langsmith_api_key is not None:

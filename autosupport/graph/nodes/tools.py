@@ -1,13 +1,12 @@
-"""Node 6: `tools` (graph-design.md) — runs the tool calls requested in the last
-`AIMessage`. A custom node rather than LangGraph's prebuilt `ToolNode`, because it also
-needs to write `tool_log`/`tool_calls_this_round` and merge `search_similar_tickets` hits
-into `retrieved_cases` (state-schema.md §2.5 lists `tools` as a writer of that key,
-tools-and-skills.md §1).
+"""Node 6: `tools` — runs the tool calls the investigator just asked for, one after another.
 
-A tool raising doesn't crash the graph: `ok=False` and an `{"error": ...}` result go back to
-the model on its next turn, same as a tool that legitimately found nothing — a real boundary
-(model-chosen tool + model-chosen arguments), not a case CLAUDE.md's "no error handling for
-cases that can't happen" rules out.
+A custom node rather than LangGraph's `ToolNode`, because it also logs each call, counts the
+round's budget, and adds `search_similar_tickets` hits to `retrieved_cases` (with similarity
+re-anchored to the ticket).
+
+A failing tool doesn't crash the run. The model picked the tool and wrote the arguments, so a
+bad call is expected now and then; it gets `{"error": ...}` back on its next turn, like any
+other result, and can try something else.
 """
 
 from __future__ import annotations

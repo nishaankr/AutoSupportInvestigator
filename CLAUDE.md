@@ -20,15 +20,17 @@ what "done" means for each stage. Do not skip ahead.
 | Lexical index (sparse) | SQLite FTS5 virtual table |
 | Structured store | SQLite → `data/autosupport.sqlite` |
 | Embeddings | local `sentence-transformers`, default `BAAI/bge-small-en-v1.5` |
-| LLM (main tier) | `anthropic:claude-sonnet-5` via `init_chat_model` |
-| LLM (fast tier) | `anthropic:claude-haiku-4-5` via `init_chat_model` |
+| LLM (main tier) | `groq:openai/gpt-oss-120b` via `init_chat_model` (`anthropic:claude-sonnet-5` supported) |
+| LLM (fast tier) | `groq:openai/gpt-oss-120b` via `init_chat_model` (`anthropic:claude-haiku-4-5` supported) |
+| LLM (eval judge) | `groq:openai/gpt-oss-120b`, set separately via `AUTOSUPPORT_JUDGE_MODEL` |
 | Interface | Typer CLI |
 | Observability + evals | LangSmith |
 | Config | `pydantic-settings` reading `.env` |
 | Packaging | `pyproject.toml`, console script `autosupport` |
 
-**The stack is locked.** Do not propose or substitute alternatives without a stated reason
-and explicit approval. If something in the stack appears not to work, say so and stop —
+**The stack is locked.** The LLM rows changed from Claude to Groq GPT-OSS by explicit
+approval (decisions.md D20, 2026-09-25); provider quirks live only in `llm.py`. Do not propose
+or substitute alternatives without a stated reason and explicit approval. If something in the stack appears not to work, say so and stop —
 do not silently swap it.
 
 ---
@@ -65,7 +67,7 @@ AutoSupport/
 ├── docs/
 │   ├── design/                   # read before implementing that layer
 │   └── project/                  # brief, build-plan checkpoints, decision record
-├── skills/                       # triage.md, investigation.md, escalation.md, customer_response.md
+├── skills/                       # investigation.md, escalation.md, customer_response.md
 ├── autosupport/
 │   ├── cli.py                    # Typer commands — rendering only
 │   ├── service.py                # the ONLY thing cli.py calls
@@ -90,7 +92,8 @@ before implementing that layer.** Where a doc and this file disagree, this file 
 the conflict.
 
 Process docs, under `docs/project/`: `checkpoints.md` (the build plan), `decisions.md` (the
-decision record), `brief.md` (client context — written during CP0's parallel track).
+decision record), `brief.md` (client context — planned for CP0's parallel track; **not in the repo yet**: the
+brief text was never provided, so demo and eval use corpus-derived tickets).
 
 ---
 
@@ -134,11 +137,15 @@ Secrets live in `.env`, which is gitignored. `.env.example` is committed with em
   raises `InvalidUpdateError`.
 - **Interrupt nodes have no side effects.** No DB writes, no tool calls, no LLM calls before
   `interrupt()`. Resuming re-executes the node from the top. The clarification question is
-  generated in `assess_evidence` and stored in `pending_question`.
+  written by `investigate` (in `submit_findings`), filtered in code by `assess_evidence`, and
+  stored in `pending_question`.
 - **Every loop has a counter in state and a limit in config**, and routes to `escalate` on
   exhaustion. The graph must always terminate.
-- **Every structured LLM step uses `.with_structured_output(PydanticModel)`.** Never parse
-  free text.
+- **Every structured LLM step uses `.with_structured_output(PydanticModel)`**, through
+  `llm.structured()`. Never parse free text. The one exception is `investigate`'s
+  `submit_findings` tool call, whose arguments are validated with Pydantic (decisions.md D19).
+- **Don't use an LLM for what Python can do.** Classification, evidence grading, query
+  building and the escalation handoff are code (D19); justify every new model call.
 - **`verify` is the in-graph evidence check. It is not the LangSmith evaluation.** Keep the
   two concepts separately named in code and in docs.
 

@@ -82,9 +82,18 @@ Runs in parallel with `retrieve_initial`, straight after `intake`.
 ## 4. Writing (`update_memory`) — the write policy
 
 Runs once per finished ticket, in parallel with `index_case`, after `persist_case`. Fast tier,
-`.with_structured_output(MemoryUpdate, method="json_schema")`, then **every rule below is
+structured output (`llm.structured(fast_llm(), MemoryUpdate)`), then **every rule below is
 enforced in code** (`graph/memory.py::apply_update`) — the prompt states the rules too, but
 the model's output is only a *proposal*; what is stored is what survives the code.
+
+Two things added after v2:
+- **Gate (D19).** A regex over the customer's text (`has_memory_candidates`: version numbers,
+  OS names, deployment/plan words, "already tried…", stated preferences) runs first. No match
+  means nothing W1–W3 could keep, so the model isn't called. W6 flags are still recomputed.
+  Product names alone don't open the gate, because almost every ticket names one.
+- **Failure is non-fatal (D22).** The case is already persisted when this runs. If the
+  extraction call fails, the error goes to `errors`, facts stay unchanged, flags are still
+  recomputed, and the ticket completes.
 
 **The test for every item:** *would this change how we handle this customer's **next** ticket,
 on a different subject?* If not, it is ticket-local — it stays in that ticket's own

@@ -208,7 +208,7 @@ def test_investigate_context_shows_top_graph_cases_with_short_snippets():
              "classification": Classification(queue="q", type="t", priority="low", tags=[], rationale="r",
                                               neighbor_agreement=1.0),
              "retrieved_cases": [case(0, "tool:search_similar_tickets")] + [case(i, "initial") for i in range(1, 20)]}
-    block = _context_block(state)
+    block = _context_block(state, 0.76)
     assert "[HF-0]" not in block  # tool hits live in their tool result, not the cached system block
     assert block.count("[HF-") == PROMPT_CASES
     assert "b" * (PROMPT_SNIPPET_CHARS + 1) not in block
@@ -219,3 +219,29 @@ def test_askable_slots_drop_secrets_and_cap_at_two():
     slots = ["Exact error message", "S3 credentials (access key/secret key)", "Bucket region", "Bucket policy"]
     assert A.askable_slots(slots) == ["Exact error message", "Bucket region"]
     assert A.askable_slots(["Your password", "API token"]) == []
+
+
+def test_verdict_explains_itself_in_plain_words():
+    # D22: the handoff states the code's reason, not the model's opinion of the evidence.
+    why = A.verdict_for(relevant=THREE, tau_rel=TAU, clusters=[cluster("HF-1", "HF-2", "HF-3")],
+                        evidence=[ev("HF-1")], missing_slots=[], history_contradicts=False)[3]
+    assert "only 1 case(s) support" in why
+    why = A.verdict_for(relevant=THREE, tau_rel=TAU, clusters=[cluster("HF-1", "HF-2", "HF-3")],
+                        evidence=SUPPORT, missing_slots=[], history_contradicts=False)[3]
+    assert why == "enough similar resolved tickets agree on one fix"
+
+
+def test_thin_ticket_gets_a_question_instead_of_an_unasked_escalation():
+    thin = "My app stopped syncing since yesterday. What do I do?"
+    assert A.thin_ticket_slots(thin, "insufficient", []) == A.THIN_TICKET_SLOTS
+    assert A.thin_ticket_slots(thin, "insufficient", ["app version"]) == ["app version"]  # model's own slots win
+    assert A.thin_ticket_slots(thin, "sufficient", []) == []
+    assert A.thin_ticket_slots(" ".join(["word"] * 30), "insufficient", []) == []  # a detailed ticket isn't thin
+
+
+def test_resolution_without_citations_gets_its_sources_listed():
+    from autosupport.graph.nodes.resolve import _with_sources
+
+    assert _with_sources("Do X.", ["HF-1", "HF-2"]).endswith("Based on similar resolved cases: [HF-1], [HF-2].")
+    assert _with_sources("Do X [HF-2].", ["HF-1", "HF-2"]) == "Do X [HF-2]."
+    assert _with_sources("Do X.", []) == "Do X."

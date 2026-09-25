@@ -51,3 +51,13 @@ def index_agent_case(conn: sqlite3.Connection, ticket_id: str, force: bool = Fal
     )
     cases_repo.mark_indexed(conn, ticket_id)
     return True
+
+
+def unindex_agent_case(conn: sqlite3.Connection, ticket_id: str) -> None:
+    """Take an agent case back out of the corpus: Chroma, FTS5 and `indexed_at`. Used by the
+    offline eval, whose memory example must index a resolution to test retrieval of it but
+    must not leave the corpus changed afterwards."""
+    dense.delete(ticket_id)
+    conn.execute("DELETE FROM dataset_tickets_fts WHERE case_id = ?", (ticket_id,))
+    conn.commit()
+    cases_repo.mark_unindexed(conn, ticket_id)

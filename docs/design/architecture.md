@@ -1,6 +1,7 @@
 # Architecture — System Overview
 
-> **Status:** Draft v1 · the system-level decisions that every other doc builds on.
+> **Status:** v2 · reconciled with the built system at CP8 (divergences from v1 are marked
+> with the decision that caused them). The system-level decisions every other doc builds on.
 > **Downstream docs:** `graph-design.md` (topology), `state-schema.md` (graph state), `rag-design.md`, `tools-and-skills.md`, `memory-design.md`, `case-persistence.md`, `evaluation-design.md`, `output-schema.md`.
 
 ---
@@ -18,9 +19,9 @@
 | Structured DB | **SQLite** (`data/autosupport.sqlite`) | Local, file-based and transactional. It holds the open and resolved cases and customer memory. |
 | Checkpointer | **`SqliteSaver`** (`data/checkpoints.sqlite`) | Resuming has to survive the CLI process exiting (see `state-schema.md` §4) |
 | Embeddings | **Local sentence-transformers model** (default `BAAI/bge-small-en-v1.5`) | Free, deterministic and offline, and ingestion costs no API spend. Detail is in `rag-design.md`. |
-| LLM: main reasoning | **Cloud model, "main" tier** (default `anthropic:claude-sonnet-5`) | Handles investigation, resolution and escalation drafting, where quality matters |
-| LLM: cheap sub-steps | **Cloud model, "fast" tier** (default `anthropic:claude-haiku-4-5`) | Handles triage, evidence grading, query rewriting, verification and memory extraction, which are high-volume, structured-output steps |
-| LLM abstraction | `langchain.chat_models.init_chat_model(...)` | The provider and model are env-configurable, so switching to OpenAI or another provider is a config change, not a code change |
+| LLM: main reasoning | **Cloud model, "main" tier** (default `groq:openai/gpt-oss-120b`; `anthropic:claude-sonnet-5` supported) | The investigation loop: tool choice and the evidence judgement |
+| LLM: cheap sub-steps | **Cloud model, "fast" tier** (default `groq:openai/gpt-oss-120b`; `anthropic:claude-haiku-4-5` supported) | Drafting the resolution, the claim check in `verify`, and memory extraction. *v1 also put triage, evidence grading, query rewriting and escalation drafting here; D19 moved all four to Python.* |
+| LLM abstraction | `langchain.chat_models.init_chat_model(...)` | The provider and model are env-configurable. Supported providers are `anthropic` and `groq` (D20); a provider's quirks live in `llm.py`, never in nodes |
 | Interface | **CLI (Typer)** | The brief says a CLI or API is enough. A CLI shows interrupt/resume across separate commands most clearly, with no server to run. |
 | Observability & evals | **LangSmith** (tracing + datasets + evaluators) | Mandated for evals. Tracing comes for free through env vars. |
 | Config & secrets | `.env` (git-ignored) + `.env.example` (committed) via `pydantic-settings` | "Keep secrets/API keys outside source control" |
@@ -73,20 +74,25 @@ Access is through plain `sqlite3` behind a thin repository module (`autosupport/
 
 ### 2.3 LLM tiering
 
-| Node(s) | Tier | Why |
+| Node(s) | Model | Why |
 |---|---|---|
-| `investigate`, `resolve`, `escalate` | **main** | Multi-case reasoning, tool selection and grounded drafting |
-| `triage`, `assess_evidence`, `refine_retrieval`, `verify`, `update_memory` | **fast** | Structured output against a fixed schema. These run often, and some run once per loop iteration. |
+| `investigate` | **main** | Multi-case reasoning and tool selection; ends each round with a `submit_findings` tool call (D19) |
+| `resolve`, `verify` (claim check), `update_memory` (gated) | **fast** | Short structured jobs against a fixed schema |
+| `triage`, `assess_evidence`, `refine_retrieval`, `escalate` | **none — Python** | A label vote, threshold rules, a query built from the hypothesis, and a handoff template (D19) |
+| offline eval judges | **judge** (`AUTOSUPPORT_JUDGE_MODEL`) | Configured separately so changing a tier never changes who grades it (D20) |
 
-- Both tiers are resolved from `.env`: `AUTOSUPPORT_MAIN_MODEL` and `AUTOSUPPORT_FAST_MODEL` (format `provider:model`).
-- Every structured step uses `.with_structured_output(PydanticModel)`, so outputs are validated rather than parsed from free text.
-- `verify` deliberately uses a **different tier** from the drafter, so the output isn't grading itself with the same model. It's a cheap, partial guard against self-agreement.
-- Temperature is 0 for the fast tier. **No temperature is set for the main tier**: Claude
-  Sonnet 5, the default main-tier model, rejects `temperature` outright (400,
-  "temperature is deprecated for this model") — current-generation Claude models above
-  the Haiku tier removed sampling controls in favour of adaptive thinking/effort. If the
-  main tier is ever pointed at an older model that still accepts `temperature`, that
-  model runs at its own default rather than a value this codebase sets.
+- All three are resolved from `.env`: `AUTOSUPPORT_MAIN_MODEL`, `AUTOSUPPORT_FAST_MODEL`,
+  `AUTOSUPPORT_JUDGE_MODEL` (format `provider:model`). A provider's API key is required only if
+  a configured model uses it.
+- Every structured step goes through `llm.structured()`: `.with_structured_output(..., method=
+  "json_schema")`, strict on Groq, and resampled when the provider rejects a malformed
+  generation (D13, D20).
+- v1 had `verify` on a **different tier** from the drafter. Since D19 both are the fast tier,
+  so the separation rests on the role (a separate adversarial prompt) plus the
+  model-independent code rules G1–G3.
+- Temperature is 0 for the fast tier. None is set for the main tier, because Claude Sonnet 5
+  rejects `temperature` outright. On Groq the fast tier also runs at low reasoning effort, and
+  every Groq call gets an explicit output ceiling (GPT-OSS counts reasoning against it, D20).
 
 ### 2.4 Interface: CLI
 | Command | Does |
@@ -150,8 +156,8 @@ flowchart LR
     N2 -->|profile + history| DB
     N2 & N6 & TL -->|similarity search| CH
     TL -->|SQL lookups / stats| DB
-    N4 & N3 & N5 & N8 & N9 -.->|LLM calls| LLM
-    N3 & N4 & N8 -.->|load| SK
+    N4 & N8 & N9 & N12 -.->|LLM calls: investigate, resolve, verify, update_memory| LLM
+    N4 & N8 -.->|load| SK
     N11 -->|final case| DB
     N12 -->|embed + upsert agent_resolved| CH
     N12 -->|customer profile| DB
@@ -180,8 +186,8 @@ flowchart LR
 5. **Resume:** `autosupport resume <ticket_id>` looks up the thread in `cases.thread_id` and calls `graph.invoke(Command(resume=...), config)`. Execution continues from the checkpoint.
 6. **Finalise:**
    - `persist_case` writes the final `CaseResult` to `cases`.
-   - `index_case` embeds the accepted resolution and upserts it into Chroma as `source="agent_resolved"`, which makes it retrievable by the very next ticket.
-   - `update_memory` upserts the customer profile.
+   - `index_case` — only for a resolution the customer **accepted** — embeds the ticket's problem text (subject + body, the same rule as the dataset) into Chroma and adds problem + accepted resolution to FTS5, as `source="agent_resolved"`. The very next ticket can retrieve it. *(v1 said "embeds the accepted resolution"; problems are matched to problems, so the answer is never embedded — `rag-design.md` §3.)*
+   - `update_memory` applies the write policy (`memory-design.md` §4) and upserts the customer profile.
 7. **Observe:** every run is traced in LangSmith, tagged with `thread_id`, `ticket_id` and `customer_id`. `autosupport eval` runs the same graph against LangSmith datasets.
 
 **Offline / online boundary:** embedding, both databases and the checkpoints are local. Only LLM calls and LangSmith telemetry leave the machine. LangSmith tracing can be turned off (`LANGSMITH_TRACING=false`) without affecting agent behaviour.
@@ -199,31 +205,39 @@ AutoSupport/
 ├── docs/                         # these design docs
 ├── skills/                       # investigation.md, escalation.md, customer_response.md
 ├── autosupport/
-│   ├── cli.py                    # Typer commands
-│   ├── service.py                # new_ticket / resume / show — the only thing the CLI calls
-│   ├── config.py                 # pydantic-settings: models, paths, limits, thresholds
-│   ├── llm.py                    # init_chat_model for main + fast tiers
+│   ├── cli.py                    # Typer commands — rendering only
+│   ├── service.py                # the only thing the CLI calls; returns Pydantic objects
+│   ├── config.py                 # pydantic-settings: models, keys, paths, limits, thresholds
+│   ├── llm.py                    # main/fast/judge models + provider helpers (structured(), …)
+│   ├── skills.py                 # skill loader
 │   ├── graph/
 │   │   ├── state.py              # AgentState + sub-models (state-schema.md)
-│   │   ├── nodes/                # one module per node
+│   │   ├── build.py              # StateGraph wiring + compile(checkpointer)
 │   │   ├── routers.py            # conditional-edge functions
-│   │   ├── confidence.py         # compute_confidence() — the scale's single definition (output-schema.md §4)
-│   │   └── build.py              # StateGraph wiring + compile(checkpointer)
-│   ├── tools/                    # @tool definitions
-│   ├── skills.py                 # skill loader
+│   │   ├── nodes/                # one module per node
+│   │   ├── assessment.py         # verdict, escalation rules, next action (pure)
+│   │   ├── confidence.py         # compute_confidence() — the scale's single definition
+│   │   ├── evidence.py           # enriches model-cited evidence from SQLite
+│   │   ├── verification.py       # grounding rules G1–G3 (pure)
+│   │   ├── memory.py             # the memory write policy + profile rendering (pure)
+│   │   ├── retrieval.py          # search result -> RetrievedCase, similarity re-anchoring
+│   │   └── runconfig.py          # reads per-run limits from config["configurable"]
+│   ├── tools/                    # the five @tool definitions
 │   ├── rag/
 │   │   ├── embedder.py           # local sentence-transformers wrapper
-│   │   ├── dense.py              # chroma client + similarity search
+│   │   ├── dense.py              # chroma client + similarity search + upsert
 │   │   ├── lexical.py            # FTS5 BM25 search
 │   │   ├── fusion.py             # reciprocal rank fusion + MMR
-│   │   └── queries.py            # query construction + metadata filters
-│   ├── store/                    # sqlite repositories: cases, customers, dataset_tickets
+│   │   └── queries.py            # hybrid search orchestration + metadata filters
+│   ├── store/                    # sqlite repositories: db, cases, customers, dataset_tickets
 │   └── ingest/
-│       ├── load.py               # HF → filtered English parquet snapshot
+│       ├── load.py               # HF → filtered English parquet snapshot (minus eval holdout)
+│       ├── text.py               # shared normalisation
 │       ├── classify.py           # answer_class heuristics + LLM residue pass
 │       ├── cluster.py            # near-duplicate clustering + canonicalisation
-│       └── index.py              # sqlite write, FTS5 build, chroma upsert
-├── evals/                        # LangSmith dataset builders + evaluators
+│       ├── index.py              # sqlite write, FTS5 build, chroma upsert
+│       └── agent_index.py        # indexing an accepted agent resolution (case-persistence §5)
+├── evals/                        # dataset, evaluators, experiment runner (evaluation-design.md)
 ├── scripts/demo.py               # the four required demo scenarios
 ├── tests/
 └── data/                         # created at runtime; git-ignored
@@ -234,21 +248,19 @@ AutoSupport/
 
 ---
 
-## 6. Dependencies (initial)
+## 6. Dependencies (as built, pinned in `pyproject.toml` / `uv.lock`)
 
 | Package | Purpose |
 |---|---|
 | `langgraph`, `langgraph-checkpoint-sqlite` | Orchestration + persistent checkpoints |
-| `langchain`, `langchain-core`, `langchain-anthropic` (+ optional `langchain-openai`) | Model abstraction, tools, messages |
-| `langchain-chroma`, `chromadb` | Vector store |
+| `langchain`, `langchain-anthropic`, `langchain-groq` | Model abstraction (`init_chat_model`), tools, messages; one provider package per supported provider (D20) |
+| `chromadb` | Vector store, used directly by `rag/dense.py`. *v1 listed `langchain-chroma` too; it was never imported and was removed at CP8.* |
 | `sentence-transformers` | Local embeddings |
 | `datasets` | Loading the HF dataset |
 | `langsmith` | Tracing, datasets, evaluators |
 | `pydantic`, `pydantic-settings` | Schemas and config |
-| `typer`, `rich` | CLI and readable terminal output |
-| `pytest` | Tests |
-
-Exact versions will be pinned in `pyproject.toml` once the first working build is done.
+| `typer`, `rich` | CLI |
+| `pytest` (dev group) | Tests |
 
 **No dependency is added for hybrid retrieval.** BM25 comes from SQLite's built-in FTS5, and RRF and MMR are written in-repo. A BM25 library would wrap what the standard library already provides, and an opaque retriever class would be harder to explain than forty lines of ranking code.
 
@@ -258,14 +270,15 @@ Exact versions will be pinned in `pyproject.toml` once the first working build i
 
 `.env.example` (committed):
 ```dotenv
-ANTHROPIC_API_KEY=
-# OPENAI_API_KEY=
+ANTHROPIC_API_KEY=          # only needed if a model string starts with anthropic:
+GROQ_API_KEY=               # only needed if a model string starts with groq:
 LANGSMITH_API_KEY=
 LANGSMITH_TRACING=true
 LANGSMITH_PROJECT=autosupport
 
-AUTOSUPPORT_MAIN_MODEL=anthropic:claude-sonnet-5
-AUTOSUPPORT_FAST_MODEL=anthropic:claude-haiku-4-5
+AUTOSUPPORT_MAIN_MODEL=groq:openai/gpt-oss-120b
+AUTOSUPPORT_FAST_MODEL=groq:openai/gpt-oss-120b
+AUTOSUPPORT_JUDGE_MODEL=groq:openai/gpt-oss-120b
 AUTOSUPPORT_EMBED_MODEL=BAAI/bge-small-en-v1.5
 AUTOSUPPORT_DATA_DIR=./data
 ```
@@ -276,11 +289,11 @@ AUTOSUPPORT_DATA_DIR=./data
 
 ## 8. Known trade-offs (early input to README "Limitations")
 - **Single process, single user.** Neither SQLite nor embedded Chroma is built for many concurrent writers. That's fine for a local CLI, but the stores would need replacing for multi-user service.
-- **Local embedding quality vs. API embeddings.** A small local model trades some retrieval quality for zero cost and offline ingestion. `rag-design.md` covers reranking to recover precision.
+- **Local embedding quality vs. API embeddings.** A small local model trades some retrieval quality for zero cost and offline ingestion. *v1 said reranking would recover precision; no reranker was built.* The BM25 arm and MMR are what compensate (`rag-design.md` §6–§8).
 - **The dataset has no customer IDs.** Customer history and long-term memory apply only to tickets created through the agent, not to the historical corpus.
 - **The self-check is model-based.** `verify` uses an LLM with rule checks. It reduces unsupported claims but can't guarantee there are none.
 - **`answer_class` is heuristic, not ground truth.** The labels come from sentence-level pattern matching validated against a 200-row sample, with an LLM only on ambiguous residue (~8–10% of rows). Measured precision (`rag-design.md` §5.4): resolution 0.839, escalation 0.840, clarification_request 0.885 — clarification clears the 0.85 bar set going in, the other two land at it within measurement noise rather than strictly above. Residual mislabelling will occasionally send a resolvable ticket down the clarification route or the reverse.
 - **Only about one in eight historical answers is a genuine resolution.** Measured: ~7–12% resolution, ~33% escalation (including handoffs — "we'll investigate and call you" carries no grounded fix, so it's classed with formal escalations), ~48–50% clarification requests. Grounding a resolution is inherently evidence-scarce on this corpus; the `resolution_only` second-pass retrieval variant (`rag-design.md` §10) exists specifically to compensate.
 - **Clustering is threshold-based.** A near-duplicate threshold is a judgement call. Set it too tight and `cluster_size` understates real agreement; too loose and genuinely distinct cases get merged, inflating confidence. The chosen threshold (T=0.92, with a same-answer-class/answer-similarity/entity guard, T_a=0.85), the full sweep, and the case argued against it are recorded in `rag-design.md` §4.
-- **Only canonicals are retrievable by similarity.** Cluster members exist in SQLite and can be fetched by ID, but they never surface from a search. This is intentional — it is what stops top-k from returning the same case five times — but it means the vector index (12,217 canonicals from 23,801 distinct English records, at the chosen threshold) is smaller than the stated corpus size.
-- **The model names above are defaults, not requirements.** Any tool-calling chat model supported by `init_chat_model` works.
+- **Only canonicals are retrievable by similarity.** Cluster members exist in SQLite and can be fetched by ID, but they never surface from a search. This is intentional — it is what stops top-k from returning the same case five times — but it means the vector index (11,903 canonicals from 23,786 records on the real full ingest; the calibration harness measured 12,217 from 23,801)  is smaller than the stated corpus size.
+- **The model names above are defaults, not requirements.** Any tool-calling chat model from a supported provider (`anthropic`, `groq`) works; adding a provider means one entry in `config.PROVIDER_KEYS`, its LangChain package, and any quirks in `llm.py`.
