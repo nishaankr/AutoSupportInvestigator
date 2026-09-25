@@ -1,4 +1,4 @@
-"""Node 2: `load_memory` (graph-design.md, memory-design.md §3).
+"""Node 2: `load_memory`.
 
 Runs in parallel with `retrieve_initial` (disjoint keys). `customer_profile` is `None` for a
 customer's first ticket — the expected common case, not an error — and afterwards holds what

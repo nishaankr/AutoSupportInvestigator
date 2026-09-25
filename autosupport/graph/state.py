@@ -1,5 +1,5 @@
 """The graph's state and every model it carries, from the ticket coming in to the final
-`CaseResult` going out (state-schema.md, output-schema.md).
+`CaseResult` going out.
 
 Working state and the final output live in one module on purpose: the output reuses the
 state's models (evidence, confidence, classification), and a second copy would drift.
@@ -17,16 +17,15 @@ from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field, computed_field, model_validator
 
-# ---------- enums ----------
 CaseStatus = Literal["open", "investigating", "awaiting_user", "resolved", "escalated"]
 Verdict = Literal["sufficient", "insufficient", "conflicting"]
 NextAction = Literal["resolve", "escalate", "refine_retrieval", "ask_user"]
 Priority = Literal["low", "medium", "high", "critical"]
-AnswerClass = Literal["resolution", "clarification_request", "escalation"]  # rag-design.md §5
+AnswerClass = Literal["resolution", "clarification_request", "escalation"]
 EscalationTrigger = Literal["rule", "evidence_exhausted", "verification_failed", "user_rejected"]
 CapReason = Literal["no_substantive_support", "insufficient", "conflicting", "verification_failed"]
 
-# output-schema.md §3.4 — the only citation syntax used in prose.
+# The only citation syntax used in prose.
 CASE_ID = r"HF-\d+|T-\d{8}-[0-9a-f]{6}"
 CITATION = re.compile(rf"\[({CASE_ID})\]")
 
@@ -35,7 +34,6 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-# ---------- identity & input (state-schema.md §2.1) ----------
 class TicketInput(BaseModel):
     subject: str
     body: str
@@ -44,7 +42,6 @@ class TicketInput(BaseModel):
     submitted_at: datetime = Field(default_factory=_utcnow)
 
 
-# ---------- triage (state-schema.md §2.4) ----------
 class Classification(BaseModel):
     queue: str
     type: str
@@ -54,7 +51,6 @@ class Classification(BaseModel):
     neighbor_agreement: float  # computed by code from retrieved_cases, not the model — see triage.py
 
 
-# ---------- retrieval (state-schema.md §2.5) ----------
 class RetrievedCase(BaseModel):
     case_id: str
     source: Literal["dataset", "agent_resolved"]
@@ -82,7 +78,6 @@ class RetrievalQuery(BaseModel):
     n_results: int
 
 
-# ---------- investigation (state-schema.md §2.6, output-schema.md §3) ----------
 class Hypothesis(BaseModel):
     statement: str
     root_cause_category: str
@@ -113,7 +108,7 @@ class ApproachCluster(BaseModel):
 class Findings(BaseModel):
     """What `investigate` submits to end a round, as the arguments of its `submit_findings` tool
     call: the hypothesis and evidence plus the judgement `assess_evidence` used to ask a second
-    model for. One model call instead of two (decisions.md D19); `assess_evidence` turns it into
+    model for. One model call instead of two; `assess_evidence` turns it into
     a verdict and a route in Python."""
 
     hypothesis: str = Field(description="One or two sentences: what is wrong and what fixes it, or that no fix is on record.")
@@ -166,14 +161,12 @@ class ToolCallRecord(BaseModel):
     round: int
 
 
-# ---------- clarification (state-schema.md §2.7) ----------
 class ClarificationTurn(BaseModel):
     question: str
     answer: str
     asked_at: datetime = Field(default_factory=_utcnow)
 
 
-# ---------- decision, draft & verification (state-schema.md §2.8, output-schema.md §2.1/§7) ----------
 class EscalationDraft(BaseModel):  # model-authored, inside DraftResponse
     target_queue: str
     reason: str
@@ -187,7 +180,7 @@ class DraftResponse(BaseModel):
 
 
 class Confidence(BaseModel):
-    """output-schema.md §4.6. Computed only by `verify` (§4.5); every path to
+    """Computed only by `verify`; every path to
     `persist_case` passes through `verify`, so `CaseResult.confidence` is required."""
 
     value: float = Field(ge=0, le=1)
@@ -203,14 +196,14 @@ class Confidence(BaseModel):
         return "high" if self.value >= 0.75 else "medium" if self.value >= 0.50 else "low"
 
 
-class VerificationResult(BaseModel):  # in-graph state, written by `verify` (CP5)
+class VerificationResult(BaseModel):  # in-graph state, written by `verify`
     passed: bool
     unsupported_claims: list[str] = Field(default_factory=list)
     issues: list[str] = Field(default_factory=list)
     recommended_action: Literal["none", "re_reason", "re_retrieve"] = "none"
 
 
-class VerificationOutcome(BaseModel):  # persisted form, output-schema.md §2
+class VerificationOutcome(BaseModel):  # persisted form
     passed: bool
     attempts: int
     unresolved_issues: list[str] = Field(default_factory=list)
@@ -225,7 +218,6 @@ class EscalationBlock(BaseModel):
     handoff_summary: str | None = None
 
 
-# ---------- memory (state-schema.md §2.3, memory-design.md) ----------
 class CustomerMemory(BaseModel):
     customer_id: str
     facts: dict[str, str] = Field(default_factory=dict)
@@ -233,7 +225,7 @@ class CustomerMemory(BaseModel):
     tried_fixes: list[str] = Field(default_factory=list)
     preferences: dict[str, str] = Field(default_factory=dict)
     # "facts.<key>" / "preferences.<key>" -> ticket_id that last wrote it. Rendered by
-    # `autosupport memory`, never put into a prompt (memory-design.md §2).
+    # `autosupport memory`, never put into a prompt.
     provenance: dict[str, str] = Field(default_factory=dict)
 
 
@@ -246,7 +238,6 @@ class CaseSummary(BaseModel):
     updated_at: datetime
 
 
-# ---------- output (output-schema.md §2, §7) ----------
 class RunStats(BaseModel):
     retrieval_rounds: int
     tool_calls: int
@@ -307,7 +298,6 @@ class CaseResult(BaseModel):
         return self
 
 
-# ---------- reducers ----------
 MAX_CASES_IN_STATE = 30
 
 
@@ -316,8 +306,7 @@ def merge_cases(left: list[RetrievedCase] | None, right: list[RetrievedCase] | N
     Keyed on `similarity`, not the fused `score` — an RRF score is only meaningful relative
     to the other results of the *same* query, so comparing scores across different queries'
     results (which is exactly what merging retrieval rounds does) isn't a valid comparison.
-    `similarity` is on one fixed scale regardless of which query or round found the case
-    (rag-design.md §7/§11). Safe for concurrent writes from parallel Send branches."""
+    `similarity` is on one fixed scale regardless of which query or round found the case. Safe for concurrent writes from parallel Send branches."""
     by_id: dict[str, RetrievedCase] = {c.case_id: c for c in (left or [])}
     for c in right or []:
         prev = by_id.get(c.case_id)
@@ -326,47 +315,37 @@ def merge_cases(left: list[RetrievedCase] | None, right: list[RetrievedCase] | N
     return sorted(by_id.values(), key=lambda c: c.similarity, reverse=True)[:MAX_CASES_IN_STATE]
 
 
-# ---------- graph state ----------
 class AgentState(TypedDict, total=False):
-    # identity & input
     ticket_id: str
     customer_id: str
     thread_id: str
     ticket: TicketInput
     status: CaseStatus
-    # short-term conversation
     messages: Annotated[list[AnyMessage], add_messages]
-    # memory
     customer_profile: CustomerMemory | None
     customer_history: list[CaseSummary]
-    # triage
     classification: Classification | None
     active_skills: list[str]
-    # retrieval
     retrieved_cases: Annotated[list[RetrievedCase], merge_cases]
     retrieval_queries: Annotated[list[RetrievalQuery], operator.add]
     retrieval_round: int
-    # investigation
     hypothesis: Hypothesis | None
     evidence: list[EvidenceEntry]
-    findings: Findings | None  # written only by `investigate` (its submit_findings call, D19)
+    findings: Findings | None  # written only by `investigate` (its submit_findings call)
     evidence_assessment: EvidenceAssessment | None
     tool_calls_this_round: int
     tool_log: Annotated[list[ToolCallRecord], operator.add]
-    # clarification
     pending_question: str | None
     clarifications: Annotated[list[ClarificationTurn], operator.add]
     clarification_count: int
-    # decision / draft / verification
     decision: Literal["resolve", "escalate"] | None
     draft: DraftResponse | None
     # Written only by `escalate`, captured when it runs: a later verify pass would change what
-    # output-schema.md §2.1's precedence computes at persist time (decisions.md D15 F4).
+    # the trigger precedence computes at persist time.
     escalation_trigger: EscalationTrigger | None
     confidence: Confidence | None
     verification: VerificationResult | None
     verify_attempts: int
-    # acceptance / output
     user_acceptance: Literal["pending", "accepted", "rejected"] | None
     user_feedback: str | None
     revision_count: int
@@ -374,9 +353,8 @@ class AgentState(TypedDict, total=False):
     errors: Annotated[list[str], operator.add]
 
 
-# ---------- public I/O schemas ----------
 class InputState(TypedDict):
-    ticket_id: str  # generated by service.new_ticket() before invoking — see case-persistence.md §6
+    ticket_id: str  # generated by service.new_ticket() before invoking
     customer_id: str
     ticket: TicketInput
 
@@ -389,8 +367,7 @@ class OutputState(TypedDict):
 
 
 # Every Pydantic type that can appear in a checkpointed `AgentState`, for the SqliteSaver
-# serde allowlist (graph/build.py) — see docs/design/state-schema.md §4 "Implementation
-# notes" and the risk this resolves, recorded in docs/project/decisions.md's CP3 entry.
+# serde allowlist (graph/build.py): a type missing here would fail to deserialise on resume.
 CHECKPOINTED_MODELS: list[type[BaseModel]] = [
     TicketInput, Classification, RetrievedCase, RetrievalQuery, Hypothesis, EvidenceItem,
     EvidenceEntry, ApproachCluster, Findings, EvidenceAssessment, ToolCallRecord, ClarificationTurn,

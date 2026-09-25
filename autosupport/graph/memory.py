@@ -1,4 +1,4 @@
-"""Long-term customer memory: the write policy (memory-design.md §4, rules W1-W6) and the one
+"""Long-term customer memory: the write policy (rules W1-W6) and the one
 prompt rendering of a loaded profile + history.
 
 The model only *proposes* a `MemoryUpdate`; `apply_update` is what decides what is stored,
@@ -29,7 +29,7 @@ _SENSITIVE = re.compile(
 )
 
 
-# The gate in front of the extraction call (D19): each alternative is the surface form of
+# The gate in front of the extraction call: each alternative is the surface form of
 # something W2 can keep — a version number, an OS, a deployment/plan word, a tried fix or a
 # stated preference. No match means nothing W1-W3 could admit, so the model isn't called.
 # Product names alone don't open the gate (almost every ticket names one); they are still

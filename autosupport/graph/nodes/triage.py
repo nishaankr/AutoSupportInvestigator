@@ -1,4 +1,4 @@
-"""Node 4: `triage` (graph-design.md) — pure Python, no model call (decisions.md D19).
+"""Node 4: `triage` — pure Python, no model call.
 
 The retrieved neighbours already carry the dataset's own queue/type/priority/tag labels, so
 classification is a vote over them, weighted by similarity and by how many historical tickets
@@ -6,7 +6,7 @@ each canonical stands for (`cluster_size`, the same weight confidence uses). A m
 the same neighbours added a call per ticket and nothing a weighted vote doesn't; the offline
 `classification_accuracy` evaluator scores this vote against held-out labels.
 
-`active_skills` (tools-and-skills.md §2) is a rule too: the `escalation` skill joins the
+`active_skills` is a rule too: the `escalation` skill joins the
 investigation when escalation-class answers dominate the neighbours or the ticket touches a
 high-stakes area.
 """
@@ -85,8 +85,7 @@ def triage(state: AgentState) -> dict:
 
 
 def _neighbor_agreement(retrieved: list[RetrievedCase]) -> float:
-    """Unweighted share of the initial retrieval round held by its modal queue
-    (state-schema.md §2.4). Recorded for the output; the verdict no longer uses it (D21)."""
+    """Unweighted share of the initial retrieval round held by its modal queue. Recorded for the output; the verdict no longer uses it."""
     if not retrieved:
         return 0.0
     counts = Counter(c.queue for c in retrieved if c.queue)

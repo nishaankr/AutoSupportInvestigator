@@ -1,4 +1,4 @@
-"""Scripted demo of the four scenarios the assignment requires (REQUIREMENTS §12 D), in one run:
+"""Scripted demo of the agent's four core scenarios, in one run:
 
 1. Normal resolution         — a ticket is investigated, resolved, accepted and indexed.
 2. Clarification + resume     — a thin ticket makes the agent ask; the answer resumes the graph.
@@ -10,11 +10,10 @@ Run with `autosupport demo` or `python scripts/demo.py`. Every run uses fresh cu
 (`DEMO-<run>-A/B/C`), so runs never see each other's memory. It goes only through
 `autosupport.service`, exactly like the CLI.
 
-The tickets below are written for this corpus. The brief's own example tickets (§5) aren't
-in the repo; when they are, swap them into `TICKETS` — nothing else depends on the wording.
+The tickets below are written for this corpus; nothing else depends on their wording.
 Each scenario reports what actually happened. The agent's decisions vary from run to run, so a
-scenario can honestly come out unmet; after the fixes in decisions.md D22, three consecutive
-runs demonstrated all four.
+scenario can honestly come out unmet. On the full index, seven consecutive runs demonstrated
+all four; one of them needed scenario 1's built-in second attempt.
 """
 
 from __future__ import annotations
@@ -25,11 +24,12 @@ from autosupport import service
 from autosupport.service import DemoReport, DemoScenario
 
 TICKETS = {
+    # Validated on the full index.
     "resolve": (
-        "MongoDB 4.4 integration options for our SaaS project management platform",
-        "We run a multi-tenant SaaS project management platform on Ubuntu 22.04 servers and want to "
-        "integrate MongoDB 4.4. What integration methods do you recommend (API connections, data "
-        "synchronization) and which resources should we start with? Our team prefers email updates.",
+        "API integration options for our project management platform",
+        "We're on the enterprise plan and run our services on AWS with Node.js 18. We want to "
+        "integrate our internal tools with your project management SaaS through its API. What "
+        "integration options are available and where is the documentation? We prefer email updates.",
     ),
     "thin": ("App stopped syncing", "My app stopped syncing since yesterday. What do I do?"),
     "thin_answer": (
@@ -37,14 +37,15 @@ TICKETS = {
         "new tasks no longer show up in Google Calendar and nothing is shown in the app."
     ),
     "follow_up": (
-        "Keeping MongoDB in sync with our project data",
-        "Following up on our MongoDB integration: what is the recommended way to keep project data "
-        "synchronized between the platform and MongoDB, and which resources cover it?",
+        "API integration for our project management platform: syncing tasks",
+        "Following up on our API integration with your project management platform: what is the "
+        "recommended way to keep our task data in sync through the integration, and which "
+        "documentation covers it?",
     ),
     "other_customer": (
-        "Recommended MongoDB integration for a SaaS project management tool",
-        "Which integration methods do you recommend for connecting MongoDB to a SaaS project "
-        "management platform, and where should our developers start?",
+        "API integration options for a project management SaaS",
+        "What API integration options does your project management SaaS platform support, and where "
+        "can our developers find the documentation?",
     ),
 }
 
@@ -64,7 +65,7 @@ def _top_cases(trace: service.TicketTrace, n: int = 5) -> list[str]:
     return [f"  [{c.case_id}] {c.source:<15} sim={c.similarity:.3f}  {c.subject[:60]}" for c in trace.retrieved[:n]]
 
 
-def scenario_resolution(customer: str) -> tuple[DemoScenario, str | None]:
+def _attempt_resolution(customer: str) -> tuple[list[str], str | None]:
     subject, body = TICKETS["resolve"]
     outcome = service.new_ticket(customer, subject, body)
     lines = [f"Customer {customer} submits: {subject!r}", _outcome_line(outcome)]
@@ -72,14 +73,26 @@ def scenario_resolution(customer: str) -> tuple[DemoScenario, str | None]:
     lines += ["Retrieved historical cases (top 5):", *_top_cases(trace),
               f"Tools the agent chose to call: {trace.tools_called or 'none'}"]
     if not (outcome.interrupt and outcome.interrupt.type == "confirmation"):
-        return DemoScenario(title="1. Normal resolution", passed=False, lines=lines), None
+        return lines, None
 
     lines += ["Proposed resolution:", *[f"  {line}" for line in outcome.interrupt.resolution.splitlines() if line]]
     accepted = service.resume_ticket(outcome.ticket_id, accept=True)
     trace = service.ticket_trace(outcome.ticket_id)
     lines += [f"Customer accepts -> status {accepted.status}; indexed for future retrieval: {trace.indexed}"]
-    passed = accepted.status == "resolved" and trace.indexed
-    return DemoScenario(title="1. Normal resolution", passed=passed, lines=lines), outcome.ticket_id if passed else None
+    return lines, outcome.ticket_id if accepted.status == "resolved" and trace.indexed else None
+
+
+def scenario_resolution(customer: str) -> tuple[DemoScenario, str | None, str]:
+    """Scenarios 3 and 4 build on this one, so an escalation (the evidence check rejecting a
+    draft, about one run in four on this ticket) gets one more try from a fresh customer. Both
+    attempts are shown. Returns the scenario, the accepted ticket and the customer who got it."""
+    lines, ticket = _attempt_resolution(customer)
+    if ticket is None:
+        customer = f"{customer}2"
+        retry, ticket = _attempt_resolution(customer)
+        lines += ["", "Attempt 1 did not end in a proposed resolution; the agent would rather escalate "
+                      "than send an unsupported answer. Attempt 2, same ticket, fresh customer:", *retry]
+    return DemoScenario(title="1. Normal resolution", passed=ticket is not None, lines=lines), ticket, customer
 
 
 def scenario_clarification(customer: str) -> DemoScenario:
@@ -148,13 +161,19 @@ def scenario_new_case_retrieval(customer: str, first_ticket: str | None) -> Demo
 def run() -> DemoReport:
     run_id = secrets.token_hex(3)
     first, second, third = (f"DEMO-{run_id}-{x}" for x in "ABC")
-    s1, first_ticket = scenario_resolution(first)
-    return DemoReport(run_id=run_id, scenarios=[
+    s1, first_ticket, first = scenario_resolution(first)
+    scenarios = [
         s1,
         scenario_clarification(second),
         scenario_memory(first, first_ticket),
         scenario_new_case_retrieval(third, first_ticket),
-    ])
+    ]
+    if first_ticket:
+        # Leave the index as we found it: agent resolutions aren't de-duplicated, so every run
+        # adding the same answer again would slowly crowd out the next run's scenario 4.
+        service.unindex_case(first_ticket)
+        scenarios[-1].lines.append(f"(Cleanup: {first_ticket} removed from the index again; its case and memory remain.)")
+    return DemoReport(run_id=run_id, scenarios=scenarios)
 
 
 if __name__ == "__main__":

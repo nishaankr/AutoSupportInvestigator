@@ -5,7 +5,7 @@ The model forms a hypothesis and calls whichever tools it thinks will test it, u
 arguments (`Findings`) carry the hypothesis, the evidence for and against it, and its judgement
 of whether that's enough (clusters, missing facts, a question for the customer). That single
 call replaced two: a second full-context "conclusion" call, and a separate model in
-`assess_evidence` re-reading the same cases (decisions.md D19). The arguments are validated
+`assess_evidence` re-reading the same cases. The arguments are validated
 with Pydantic here — structured output delivered as a tool call.
 
 If the model answers in prose, sends invalid arguments, or runs out of tool budget, a forced
@@ -56,8 +56,8 @@ def investigate(state: AgentState, config: RunnableConfig) -> dict:
         llm = model.bind_tools([*build_tools(state["customer_id"], state["ticket_id"]), SUBMIT_FINDINGS],
                                **must_call_a_tool(model))
         # Prompt caching: each turn re-sends tools + system + the conversation so far; every
-        # turn after the first reads that prefix from cache (D18). Anthropic needs the
-        # request option; Groq caches prefixes automatically (D20).
+        # turn after the first reads that prefix from cache. Anthropic needs the
+        # request option; Groq caches prefixes automatically.
         try:
             ai_message = llm.invoke([("system", system), *state["messages"], *new_messages],
                                     **anthropic_only(model, cache_control=CACHE))
@@ -66,7 +66,7 @@ def investigate(state: AgentState, config: RunnableConfig) -> dict:
                 raise
             ai_message = None  # answered in text despite required tool use: forced submit below
         if ai_message and ai_message.tool_calls and not _submit_call(ai_message):
-            return {"messages": [*new_messages, ai_message]}  # real tools -> `tools` node
+            return {"messages": [*new_messages, ai_message]}
 
     findings = _findings(ai_message)
     if findings is None:  # prose answer, invalid arguments, or budget spent: one forced submit
@@ -136,7 +136,7 @@ def _forced_submit(system: str, conversation: list):
     as system + one user turn holding the transcript, so a trailing prose turn or earlier
     thinking blocks can't make the request invalid; thinking is disabled because forced tool
     choice doesn't allow it. Resampled when Groq reports `tool_use_failed` (JSON written as
-    text, or a call to a tool not offered) or the arguments don't validate (D20)."""
+    text, or a call to a tool not offered) or the arguments don't validate."""
     model = main_llm()
     llm = model.bind_tools([SUBMIT_FINDINGS], tool_choice=SUBMIT)
     messages = [("system", system), ("user", f"Your investigation so far:\n{_transcript(conversation)}\n\n"
@@ -177,14 +177,14 @@ def _context_block(state: AgentState, tau_rel: float) -> str:
     classification = state["classification"]
     # Only graph-retrieved cases, and only the top few: a tool search's hits are already in its
     # tool result, and leaving them out keeps this block (the system prompt) unchanged for the
-    # whole round, so the prompt cache holds across every ReAct turn (D18).
+    # whole round, so the prompt cache holds across every ReAct turn.
     retrieved: list[RetrievedCase] = [
         c for c in state.get("retrieved_cases", []) if not c.query_label.startswith("tool:")
     ][:PROMPT_CASES]
 
     # `relevant` is the same cut the evidence check applies (similarity >= tau_rel). Stating it
     # lets the model cluster exactly the cases the check will weigh; left to guess, it
-    # clustered only the one case it cited (D22).
+    # clustered only the one case it cited.
     cases_block = "\n\n".join(
         f"[{c.case_id}] relevant={'yes' if c.similarity >= tau_rel else 'no'} source={c.source} "
         f"subject={c.subject!r} answer_class={c.answer_class} "

@@ -1,8 +1,7 @@
-"""CP5 graph-path tests: the whole topology on a real file-backed `SqliteSaver` (with the same
+"""Graph-path tests: the whole topology on a real file-backed `SqliteSaver` (with the same
 serde allowlist production uses, so every checkpointed type must round-trip), LLMs and
-retrieval stubbed. Covers checkpoints.md CP5 "Done" parts 3 and 4 deterministically:
-the rejection loop and forced exhaustion of every loop counter. Part 1 (a real process exit
-between `new` and `resume`) is verified live, not here — see the CP5 verification run."""
+retrieval stubbed. Covers the rejection loop and forced exhaustion of every loop counter
+deterministically. A real process exit between `new` and `resume` is verified live, not here."""
 
 from __future__ import annotations
 
@@ -91,7 +90,7 @@ def env(tmp_path, monkeypatch):
 
 
 def _wire(monkeypatch, *, sufficient: bool, verify_fails: bool, tools_per_turn: int = 0):
-    # triage, assess_evidence, refine_retrieval and escalate make no model calls (D19).
+    # triage, assess_evidence, refine_retrieval and escalate make no model calls.
     findings = Findings(
         hypothesis="SMB2 disabled", root_cause_category="config", supporting_case_ids=CASE_IDS,
         evidence=[EvidenceItem(case_id=c, summary="re-enable SMB2", stance="supports") for c in CASE_IDS]
@@ -142,7 +141,7 @@ def test_happy_path_pauses_at_confirmation_then_accepts(env, monkeypatch):
     result = out["final_output"]
     assert (result.status, result.acceptance, result.verification.passed) == ("resolved", "accepted", True)
     assert result.confidence.band in ("medium", "high")
-    # CP6: the accepted resolution is indexed and the customer's memory written.
+    # The accepted resolution is indexed and the customer's memory written.
     conn = store_db.connect()
     assert conn.execute("SELECT indexed_at FROM cases").fetchone()["indexed_at"] is not None
     assert conn.execute("SELECT source FROM dataset_tickets_fts WHERE case_id LIKE 'T-%'").fetchone()[0] == "agent_resolved"
@@ -163,7 +162,7 @@ def test_rejection_loops_to_a_new_draft_then_exhausts_to_escalation(env, monkeyp
     out = graph.invoke(Command(resume={"accepted": False, "feedback": "still wrong"}), cfg)
     result = out["final_output"]  # max_revisions=1 spent -> escalate
     assert (result.status, result.escalation.trigger, result.acceptance) == ("escalated", "user_rejected", "rejected")
-    conn = store_db.connect()  # CP6: a rejected, escalated case never grows the corpus
+    conn = store_db.connect()  # A rejected, escalated case never grows the corpus
     assert conn.execute("SELECT indexed_at FROM cases").fetchone()["indexed_at"] is None
     conn.close()
     assert result.stats.revisions == 2
@@ -172,7 +171,7 @@ def test_rejection_loops_to_a_new_draft_then_exhausts_to_escalation(env, monkeyp
 def test_every_loop_exhausts_to_escalation_with_counters_at_limits(env, monkeypatch):
     """Insufficient evidence + a fixable-looking gap forever, tools every turn: retrieval (B),
     clarification (C) and tool (A) loops all run to their limits and the run still terminates
-    in `escalate`. The escalation draft is a template (D19), so `verify` checks it with code
+    in `escalate`. The escalation draft is a template, so `verify` checks it with code
     rules only and it passes first time; loop D's exhaustion is covered by the resolve-path
     test below."""
     _wire(monkeypatch, sufficient=False, verify_fails=True, tools_per_turn=3)
@@ -199,7 +198,7 @@ def test_every_loop_exhausts_to_escalation_with_counters_at_limits(env, monkeypa
 
 def test_worst_case_fits_one_invocation_under_the_recursion_limit(env, monkeypatch):
     """With no clarification budget the whole worst case runs in ONE invoke — the case the
-    recursion_limit=100 derivation (graph-design.md §6) is about. No GraphRecursionError."""
+    recursion_limit=100 derivation is about. No GraphRecursionError."""
     # One tool call per turn is the true worst case: the model uses all 6 calls of every round
     # one investigate <-> tools pass at a time.
     _wire(monkeypatch, sufficient=False, verify_fails=True, tools_per_turn=1)
@@ -222,7 +221,7 @@ def test_verify_exhaustion_on_a_resolve_draft_escalates_with_verification_failed
 
 
 def test_a_model_that_never_submits_findings_escalates_instead_of_crashing(env, monkeypatch):
-    """D20: GPT-OSS sometimes writes findings as text or calls a tool that wasn't offered, and
+    """GPT-OSS sometimes writes findings as text or calls a tool that wasn't offered, and
     Groq rejects it (`tool_use_failed`). After the forced attempts the round degrades to
     "no findings" and the ticket goes to a person."""
     _wire(monkeypatch, sufficient=True, verify_fails=False)

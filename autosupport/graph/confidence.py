@@ -1,5 +1,4 @@
-"""The confidence score: computed from the evidence, never reported by a model
-(output-schema.md §4, decisions.md D12).
+"""The confidence score: computed from the evidence, never reported by a model.
 
 Only `verify` calls this, once per draft. Roughly: how much resolution-class evidence
 supports the answer (weighted by how many historical tickets each case stands for), how much
@@ -27,7 +26,7 @@ BAND_HIGH = 0.75
 BAND_MEDIUM = 0.50
 
 # (cap_reason, cap_value), checked in this order; the lowest *applicable* value wins
-# (output-schema.md §4.4 "cap = lowest applicable of").
+#.
 _CAP_NO_SUBSTANTIVE_SUPPORT = ("no_substantive_support", 0.20)
 _CAP_INSUFFICIENT = ("insufficient", 0.45)
 _CAP_CONFLICTING = ("conflicting", 0.60)

@@ -1,6 +1,6 @@
 """Ingest orchestration: load -> classify -> cluster -> SQLite write -> FTS5 build ->
-embed canonicals -> Chroma upsert (architecture.md §4.1.2-4.1.6). The one entry point,
-`run`, is what `autosupport ingest` calls (via service.py — CLAUDE.md's UI-seam rule)."""
+embed canonicals -> Chroma upsert. The one entry point,
+`run`, is what `autosupport ingest` calls, through service.py like every command."""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ def _classify_all(records: pd.DataFrame) -> pd.DataFrame:
 
         llm = structured(fast_llm(), classify.ResidueClassification)
         # Not traced: a full ingest makes ~2,400 of these calls, each would count as its own
-        # LangSmith trace, and one ingest used up the free tier's 5,000-a-month (D22). Tracing
+        # LangSmith trace, and one ingest used up the free tier's 5,000-a-month. Tracing
         # is for agent runs and evals, not a batch job.
         with tracing_context(enabled=False):
             for idx in residue:
@@ -105,8 +105,8 @@ def _upsert_chroma(records: pd.DataFrame, embed_vectors: np.ndarray, rebuild: bo
         client.delete_collection(COLLECTION_NAME)
     # Chroma's default HNSW space is squared L2, not cosine. embed_vectors are already
     # L2-normalised (rag/embedder.py), so ranking order would come out the same either way,
-    # but the *value* Chroma reports as "distance" would be the wrong number — rag-design.md
-    # §9's tau_rel/SIM_CEILING and output-schema.md's confidence formula both compare against
+    # but the *value* Chroma reports as "distance" would be the wrong number — tau_rel,
+    # SIM_CEILING and the confidence formula all compare against
     # true cosine similarity, not an L2 distance transform of it. Set explicitly so `1 -
     # distance` in dense.py is actually cosine similarity, not something that merely ranks
     # the same. get_or_create_collection only applies this metadata on first creation; an
@@ -119,7 +119,7 @@ def _upsert_chroma(records: pd.DataFrame, embed_vectors: np.ndarray, rebuild: bo
     documents = canonical["embed_text"].tolist()
     metadatas = [_chroma_metadata(row) for _, row in canonical.iterrows()]
     # Chroma caps a single upsert (5,461 here). A `--limit` ingest never reaches it, and the
-    # full corpus (~11.9K canonicals) failed on it after 38 minutes of work (D22) — so batch.
+    # full corpus (~11.9K canonicals) failed on it after 38 minutes of work — so batch.
     step = client.get_max_batch_size()
     for start in range(0, len(ids), step):
         end = start + step
@@ -145,7 +145,7 @@ def run(limit: int | None = None, rebuild: bool = False) -> IngestReport:
     dataset_tickets.mark_indexed(conn, indexed_ids)
     if rebuild:
         # --rebuild dropped the FTS5 table and the Chroma collection; put back what the agent
-        # learned at runtime (case-persistence.md §5.3).
+        # learned at runtime.
         for ticket_id in cases_repo.indexed_ticket_ids(conn):
             agent_index.index_agent_case(conn, ticket_id, force=True)
 

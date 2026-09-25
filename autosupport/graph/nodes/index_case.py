@@ -1,4 +1,4 @@
-"""Node 17: `index_case` (graph-design.md, case-persistence.md §5) — no LLM.
+"""Node 17: `index_case` — no LLM.
 
 Runs for every finished ticket, in parallel with `update_memory`; the index policy (only
 accepted resolutions) is applied inside `index_agent_case`, so escalated, rejected and

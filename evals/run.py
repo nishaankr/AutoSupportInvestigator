@@ -1,4 +1,4 @@
-"""One offline eval experiment (evaluation-design.md §3): sync the dataset, run every example
+"""One offline eval experiment: sync the dataset, run every example
 through the real graph, score it with `evals/evaluators.py`, and summarise.
 
 Tracing is off for normal use; this run switches it on for itself only. Each example is one
@@ -17,6 +17,7 @@ from autosupport.graph.build import compiled_graph
 from evals import dataset, evaluators
 
 TOP_RETRIEVED = 10
+FIRST_TICKET_ATTEMPTS = 3
 
 
 def _outcome(status: str, interrupt) -> str:
@@ -56,13 +57,23 @@ def _snapshot(ticket: service.TicketOutcome, thread_id: str) -> dict:
     }
 
 
-def _run_first_ticket(customer: str, first: dict, thread_id: str) -> tuple[str, str]:
+def _run_first_ticket(customer: str, first: dict, thread_id: str) -> tuple[str, str, str, int]:
     """The memory example's first ticket: run with the acceptance step on and accepted, so it is
-    indexed exactly as a real customer-accepted resolution would be."""
-    outcome = service.new_ticket(customer, first["subject"], first["body"], thread_id=thread_id, require_acceptance=True)
-    if outcome.interrupt and outcome.interrupt.type == "confirmation":
-        outcome = service.resume_ticket(outcome.ticket_id, accept=True)
-    return outcome.ticket_id, outcome.status
+    indexed exactly as a real customer-accepted resolution would be.
+
+    It is the example's precondition, not what it measures, so it gets up to
+    FIRST_TICKET_ATTEMPTS tries; the count is reported in the outputs. Each try is a fresh
+    customer: a failed try's escalation must not count toward the real customer's
+    `repeat_unresolved` flag. Returns (customer, ticket_id, status, attempts)."""
+    for attempt in range(1, FIRST_TICKET_ATTEMPTS + 1):
+        who = customer if attempt == 1 else f"{customer}-try{attempt}"
+        outcome = service.new_ticket(who, first["subject"], first["body"],
+                                     thread_id=f"{thread_id}:{attempt}", require_acceptance=True)
+        if outcome.interrupt and outcome.interrupt.type == "confirmation":
+            outcome = service.resume_ticket(outcome.ticket_id, accept=True)
+        if outcome.status == "resolved":
+            break
+    return who, outcome.ticket_id, outcome.status, attempt
 
 
 def _target(run_id: str):
@@ -73,33 +84,21 @@ def _target(run_id: str):
         customer = f"EVAL-{run_id}-{example_id}"
         first_id = None
         if "first_ticket" in inputs:
-            first_id, first_status = _run_first_ticket(customer, inputs["first_ticket"], f"{thread_id}:first")
+            customer, first_id, first_status, attempts = _run_first_ticket(
+                customer, inputs["first_ticket"], f"{thread_id}:first")
         ticket = service.new_ticket(customer, inputs["subject"], inputs["body"],
                                     thread_id=thread_id, require_acceptance=False)
         out = _snapshot(ticket, thread_id)
         if first_id:
             out.update({
-                "first_ticket_id": first_id, "first_ticket_status": first_status,
+                "first_ticket_id": first_id, "first_ticket_status": first_status, "first_ticket_attempts": attempts,
                 "memory_loaded": bool(out["customer_profile"] and out["customer_profile"]["facts"]),
                 "first_ticket_retrieved": any(c["case_id"] == first_id and c["source"] == "agent_resolved"
                                               for c in out["retrieved"]),
             })
-            _unindex(first_id)
+            service.unindex_case(first_id)  # leave the corpus as it was found
         return out
     return target
-
-
-def _unindex(ticket_id: str) -> None:
-    """Take the memory example's first ticket back out of the corpus, so an eval run never
-    leaves the index it measures different from how it found it."""
-    from autosupport.ingest.agent_index import unindex_agent_case
-    from autosupport.store import db as store_db
-
-    conn = store_db.connect()
-    try:
-        unindex_agent_case(conn, ticket_id)
-    finally:
-        conn.close()
 
 
 def run(dataset_name: str = dataset.DEFAULT_DATASET) -> dict:
@@ -116,7 +115,7 @@ def run(dataset_name: str = dataset.DEFAULT_DATASET) -> dict:
             experiment_prefix=f"autosupport-{run_id}",
             metadata={"run_id": run_id, "main_model": settings.main_model, "fast_model": settings.fast_model,
                       "judge_model": settings.judge_model, "tau_rel": settings.tau_rel},
-            max_concurrency=1,  # one SQLite checkpointer connection and store (evaluation-design.md §3)
+            max_concurrency=1,  # one SQLite checkpointer connection and store
             disable_evaluator_tracing=True,  # only the groundedness judge traces, by choice
             client=client,
         )

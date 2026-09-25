@@ -77,7 +77,7 @@ def test_search_forces_quoted_phrases_even_when_the_text_has_no_rare_terms(conn)
 
 
 def test_ask_user_payload_is_a_pure_function_of_the_checkpoint():
-    """Interrupt nodes re-run from the top on resume (graph-design.md §7.3): the pre-interrupt
+    """Interrupt nodes re-run from the top on resume: the pre-interrupt
     payload must rebuild identically, so the customer sees the question they answered."""
     from autosupport.graph.nodes.ask_user import build_payload
 

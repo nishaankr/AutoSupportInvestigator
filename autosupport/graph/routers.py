@@ -1,7 +1,7 @@
-"""Conditional-edge functions (docs/design/graph-design.md §4.2). Every loop these routers
+"""Conditional-edge functions. Every loop these routers
 close has a counter in state and a limit in `config["configurable"]`, and every branch that
 can't make progress routes to `escalate` (or `persist_case` from an already-escalating run),
-so the graph always terminates (§6).
+so the graph always terminates.
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ def route_after_confirm(state: AgentState, config: RunnableConfig) -> Literal["p
     if state["user_acceptance"] == "accepted":
         return "persist_case"
     # `confirm_resolution` has already counted this rejection, so `<=` allows exactly
-    # `max_revisions` revised drafts (D15 F7: graph-design.md's `<` would allow none).
+    # `max_revisions` revised drafts (`<` would allow none).
     if state["revision_count"] <= run_setting(config, "max_revisions"):
         return "investigate"
     return "escalate"

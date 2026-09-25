@@ -15,8 +15,17 @@ from autosupport.config import settings
 
 @cache
 def _model():
+    from huggingface_hub.utils import disable_progress_bars
+    from huggingface_hub.utils import logging as hub_logging
     from sentence_transformers import SentenceTransformer
+    from transformers.utils import logging as transformers_logging
 
+    # The Hub's rate-limit warning and the weight-loading bar would land in the middle of the
+    # CLI's live step lines; real errors still raise.
+    disable_progress_bars()
+    hub_logging.set_verbosity_error()
+    transformers_logging.set_verbosity_error()
+    transformers_logging.disable_progress_bar()
     return SentenceTransformer(settings.embed_model)
 
 

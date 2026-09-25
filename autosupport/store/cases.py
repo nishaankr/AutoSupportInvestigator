@@ -1,4 +1,4 @@
-"""Repository for the `cases` table (case-persistence.md)."""
+"""Repository for the `cases` table."""
 
 from __future__ import annotations
 
@@ -16,9 +16,8 @@ def insert_open(
     conn: sqlite3.Connection, ticket_id: str, customer_id: str, thread_id: str, ticket: TicketInput
 ) -> None:
     """The only `INSERT` into `cases`. Uses `ON CONFLICT` rather than a bare insert so a
-    follow-up on an already-closed ticket (state-schema.md §5: "reopens the same thread")
-    resets `status` without discarding `subject`/`body`/`created_at` — case-persistence.md
-    §3 "Idempotency"."""
+    follow-up on an already-closed ticket (it reopens the same thread)
+    resets `status` without discarding `subject`/`body`/`created_at`."""
     now = _now()
     conn.execute(
         """
@@ -44,7 +43,7 @@ def set_status(
     conn: sqlite3.Connection, ticket_id: str, status: CaseStatus, pending_question: str | None = None
 ) -> None:
     """Status transitions outside intake/triage/persist: `awaiting_user` (written by the node
-    that routes *into* an interrupt — graph-design.md §7.4) and back to `investigating`
+    that routes *into* an interrupt) and back to `investigating`
     (written by `service.resume_ticket`, never by the interrupt node itself)."""
     conn.execute(
         "UPDATE cases SET status = ?, pending_question = ?, updated_at = ? WHERE ticket_id = ?",
@@ -54,7 +53,7 @@ def set_status(
 
 
 def list_cases(conn: sqlite3.Connection, customer_id: str | None, awaiting: bool) -> list[sqlite3.Row]:
-    """case-persistence.md §4 `list` query; served by idx_cases_customer_updated / idx_cases_status."""
+    """The `list` query; served by idx_cases_customer_updated / idx_cases_status."""
     return conn.execute(
         "SELECT ticket_id, customer_id, status, subject, pending_question, updated_at FROM cases "
         "WHERE (? IS NULL OR customer_id = ?) AND (? = 0 OR status = 'awaiting_user') "
@@ -76,7 +75,7 @@ def get(conn: sqlite3.Connection, ticket_id: str) -> sqlite3.Row | None:
 
 
 def escalations_since(conn: sqlite3.Connection, customer_id: str, since: datetime) -> int:
-    """memory-design.md W6 `repeat_unresolved` count (ISO-8601 UTC strings compare in order)."""
+    """The W6 `repeat_unresolved` count (ISO-8601 UTC strings compare in order)."""
     return conn.execute(
         "SELECT COUNT(*) FROM cases WHERE customer_id = ? AND status = 'escalated' AND updated_at >= ?",
         (customer_id, since.isoformat()),
@@ -99,7 +98,7 @@ def indexed_ticket_ids(conn: sqlite3.Connection) -> list[str]:
 
 def agent_search_rows(conn: sqlite3.Connection, ticket_ids: list[str]) -> dict[str, dict]:
     """Indexed agent cases in the same shape `rag/queries.py` reads from `dataset_tickets`,
-    so a `T-` search hit renders exactly like a dataset one (case-persistence.md §5.2)."""
+    so a `T-` search hit renders exactly like a dataset one."""
     if not ticket_ids:
         return {}
     placeholders = ",".join("?" for _ in ticket_ids)
@@ -122,8 +121,8 @@ def agent_search_rows(conn: sqlite3.Connection, ticket_ids: list[str]) -> dict[s
 
 def history_for(conn: sqlite3.Connection, customer_id: str, exclude_ticket_id: str, limit: int = 5) -> list[CaseSummary]:
     """The customer's open cases plus their last `limit` terminal (resolved/escalated)
-    cases (state-schema.md §2.3), excluding the ticket that was just opened by `intake`
-    for this very run (memory-design.md §3)."""
+    cases, excluding the ticket that was just opened by `intake`
+    for this very run."""
     terminal = conn.execute(
         "SELECT ticket_id, status, subject, classification, final_output, updated_at FROM cases "
         "WHERE customer_id = ? AND ticket_id != ? AND status IN ('resolved', 'escalated') "

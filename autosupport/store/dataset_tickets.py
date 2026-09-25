@@ -1,4 +1,4 @@
-"""Repository for the `dataset_tickets` table and its FTS5 index (architecture.md §2.2)."""
+"""Repository for the `dataset_tickets` table and its FTS5 index."""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ def insert_all(conn: sqlite3.Connection, records: pd.DataFrame) -> None:
 def rebuild_fts(conn: sqlite3.Connection) -> None:
     """Repopulates the dataset half of `dataset_tickets_fts` from canonical rows only — the
     retrievable set, matching what gets embedded into Chroma, so RRF never double-counts a
-    near-duplicate. Agent-resolved rows are left alone (case-persistence.md §5.3)."""
+    near-duplicate. Agent-resolved rows are left alone."""
     conn.execute("DELETE FROM dataset_tickets_fts WHERE source = 'dataset'")
     rows = conn.execute(
         "SELECT case_id, source, subject_ix, body_ix, answer_ix, queue, type, answer_class, "
@@ -109,10 +109,3 @@ def cluster_size_distribution(conn: sqlite3.Connection) -> dict[str, int]:
         key = "1" if size <= 1 else "2-3" if size <= 3 else "4-7" if size <= 7 else "8-15" if size <= 15 else "16+"
         buckets[key] += 1
     return buckets
-
-
-def row_counts(conn: sqlite3.Connection) -> dict[str, int]:
-    total = conn.execute("SELECT COUNT(*) FROM dataset_tickets").fetchone()[0]
-    canonical = conn.execute("SELECT COUNT(*) FROM dataset_tickets WHERE is_canonical = 1").fetchone()[0]
-    below_threshold = conn.execute("SELECT COUNT(*) FROM dataset_tickets WHERE below_content_threshold = 1").fetchone()[0]
-    return {"total": total, "canonical": canonical, "below_content_threshold": below_threshold}

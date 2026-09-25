@@ -17,7 +17,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_ENV_FILE = _REPO_ROOT / ".env"
 _DEFAULT_DATA_DIR = _REPO_ROOT / "data"
-# `provider:` prefix of a model string -> (Settings field holding its key, env var name).
 PROVIDER_KEYS = {"anthropic": ("anthropic_api_key", "ANTHROPIC_API_KEY"), "groq": ("groq_api_key", "GROQ_API_KEY")}
 
 
@@ -28,39 +27,36 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # --- secrets & third-party config — no AUTOSUPPORT_ prefix, matches .env.example ---
+    # Third-party variables keep their own names (no AUTOSUPPORT_ prefix), as in .env.example.
     # Each provider's key is required only if a configured model uses that provider (validator below).
     anthropic_api_key: SecretStr | None = Field(default=None, validation_alias="ANTHROPIC_API_KEY")
     groq_api_key: SecretStr | None = Field(default=None, validation_alias="GROQ_API_KEY")
     langsmith_api_key: SecretStr | None = Field(default=None, validation_alias="LANGSMITH_API_KEY")
     # Off by default: ordinary runs aren't traced. `autosupport eval` and
-    # scripts/smoke_langsmith.py turn tracing on for themselves (decisions.md D23).
+    # scripts/smoke_langsmith.py turn tracing on for themselves.
     langsmith_tracing: bool = Field(default=False, validation_alias="LANGSMITH_TRACING")
     langsmith_project: str = Field(default="autosupport", validation_alias="LANGSMITH_PROJECT")
 
-    # --- models (architecture.md §2.3) ---
     main_model: str = "groq:openai/gpt-oss-120b"
     fast_model: str = "groq:openai/gpt-oss-120b"
-    # The offline-eval judge (evaluation-design.md §4) is configured separately from the tiers
+    # The offline-eval judge is configured separately from the tiers
     # under test, so swapping a tier's model never changes who grades it.
     judge_model: str = "groq:openai/gpt-oss-120b"
     embed_model: str = "BAAI/bge-small-en-v1.5"
     # No main-tier temperature: Claude Sonnet 5 rejects `temperature` outright (llm.py).
     fast_temperature: float = 0.0
 
-    # --- storage ---
     data_dir: Path = _DEFAULT_DATA_DIR
 
-    # --- run limits & thresholds (graph-design.md §9) ---
     max_tool_calls_per_round: int = 6
     max_retrieval_rounds: int = 3
     max_clarifications: int = 2
     max_verify_retries: int = 2
     max_revisions: int = 1
-    tau_rel: float = 0.76  # measured random-pair p95 (rag-design.md §9), not a guess
+    tau_rel: float = 0.76  # measured random-pair p95, not a guess
     require_acceptance: bool = True
-    # Worst single invocation is ~70 supersteps (graph-design.md §6 derivation); 100 keeps the
-    # recursion limit a pure backstop that never fires before a loop counter does (D15 F2).
+    # Worst single invocation is ~70 supersteps (measured in the graph tests); 100 keeps the
+    # recursion limit a pure backstop that never fires before a loop counter does.
     recursion_limit: int = 100
 
     @field_validator("main_model", "fast_model", "judge_model")
@@ -95,7 +91,7 @@ class Settings(BaseSettings):
     @field_validator("data_dir", mode="after")
     @classmethod
     def _anchor_relative_data_dir_to_repo_root(cls, v: Path) -> Path:
-        # .env.example ships `AUTOSUPPORT_DATA_DIR=./data` (architecture.md §7), which is
+        # .env.example ships `AUTOSUPPORT_DATA_DIR=./data`, which is
         # relative. Resolve it against the repo root, not whatever the current working
         # directory happens to be when `autosupport` or pytest is invoked.
         return v if v.is_absolute() else (_REPO_ROOT / v).resolve()

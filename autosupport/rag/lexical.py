@@ -1,7 +1,7 @@
-"""SQLite FTS5 BM25 query — the sparse (lexical) arm of hybrid retrieval (rag-design.md §6).
+"""SQLite FTS5 BM25 query — the sparse (lexical) arm of hybrid retrieval.
 
-Flat column weights (measured indistinguishable from a subject/tags/answer-weighted variant
-— rag-design.md §6), `unicode61 remove_diacritics 2` tokenizer with **no Porter stemming**
+Flat column weights (measured indistinguishable from a subject/tags/answer-weighted variant),
+`unicode61 remove_diacritics 2` tokenizer with **no Porter stemming**
 (Porter mangles entity tokens: "NAS" -> "na" — the FTS5 table itself is built that way by
 `store/db.py`, this module just queries it).
 """
@@ -31,7 +31,7 @@ def _candidate_terms(text: str) -> set[str]:
 
 def query_terms(conn: sqlite3.Connection, text: str, n_docs: int) -> list[str]:
     """Top `BM25_TERMS` terms by IDF (rarest first), excluding any term with document
-    frequency >= 20% of the index. That threshold *is* the stoplist (rag-design.md §6) —
+    frequency >= 20% of the index. That threshold *is* the stoplist —
     measured, not hand-written: it's exactly where this corpus's own boilerplate vocabulary
     (`assistance`, `issue`, `please`, `problem`...) starts."""
     candidates = _candidate_terms(text)
@@ -49,7 +49,7 @@ def query_terms(conn: sqlite3.Connection, text: str, n_docs: int) -> list[str]:
     return [t for t, _ in scored[:BM25_TERMS]]
 
 
-# UNINDEXED FTS5 columns a caller may filter on (rag-design.md §6, §10 V2/V4). Whitelisted
+# UNINDEXED FTS5 columns a caller may filter on (retrieval variants V2/V4). Whitelisted
 # because the column name is interpolated into SQL.
 FILTERABLE_COLUMNS = frozenset({"queue", "type", "answer_class", "source"})
 
@@ -62,7 +62,7 @@ def search(
     phrases: tuple[str, ...] | list[str] = (),
 ) -> list[LexicalHit]:
     """Top-`n` canonicals by BM25 over the query's rarest terms, plus any `phrases` forced
-    in as quoted matches (rag-design.md §10 V1/V3: entities from a clarification answer or
+    in as quoted matches (variants V1/V3: entities from a clarification answer or
     keywords from a hypothesis rewrite). `where` filters on UNINDEXED metadata columns."""
     n_docs = conn.execute("SELECT COUNT(*) FROM dataset_tickets_fts").fetchone()[0]
     terms = query_terms(conn, text, n_docs)

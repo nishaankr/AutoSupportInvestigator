@@ -1,7 +1,7 @@
-"""Shared text normalisation for ingest (docs/design/rag-design.md §2). Used by load.py
+"""Shared text normalisation for ingest. Used by load.py
 (dedup key, FTS5/embed index text), classify.py (pattern matching) and cluster.py (entity
 guard). One definition, so the ingested data and the calibration harness can never drift
-the way they did before rag-design.md was rewritten (see decisions.md D4/D5 history)."""
+the way an earlier inline copy once did."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ def index_body(s: str) -> str:
 
 
 def embed_text(subject_ix: str, body_ix: str) -> str:
-    """The dense/clustering vector text (rag-design.md §3): subject + body when a subject
+    """The dense/clustering vector text: subject + body when a subject
     exists, body alone otherwise. Answer text is deliberately excluded — we match problems,
     not the templated phrasing of how they were answered."""
     return f"{subject_ix}. {body_ix}" if subject_ix else body_ix

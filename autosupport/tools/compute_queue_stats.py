@@ -1,6 +1,6 @@
-"""`compute_queue_stats` (tools-and-skills.md §1) — corpus-wide pattern context (how common
+"""`compute_queue_stats` — corpus-wide pattern context (how common
 a queue/type combination is), not per-ticket evidence. Canonical rows only, matching the
-retrievable set (rag-design.md §4) so counts reflect distinct scenarios, not template
+retrievable set so counts reflect distinct scenarios, not template
 duplicates."""
 
 from __future__ import annotations

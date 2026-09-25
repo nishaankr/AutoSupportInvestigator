@@ -1,4 +1,4 @@
-"""case-persistence.md §5: which agent cases grow the corpus, and that an indexed one comes
+"""Which agent cases grow the corpus, and that an indexed one comes
 back out of retrieval as `source="agent_resolved"`. Embedding and Chroma are stubbed; the
 SQLite/FTS5 side is real."""
 
@@ -82,7 +82,7 @@ def test_dataset_fts_rebuild_keeps_agent_rows(conn):
 
 
 def test_chroma_upsert_is_batched_under_the_client_limit(tmp_path, monkeypatch):
-    # D22: the full corpus (~11.9K canonicals) exceeded Chroma's 5,461-item upsert limit.
+    # The full corpus (~11.9K canonicals) exceeded Chroma's 5,461-item upsert limit.
     import pandas as pd
     from autosupport.config import settings
     from autosupport.ingest import index
@@ -114,7 +114,7 @@ def test_chroma_upsert_is_batched_under_the_client_limit(tmp_path, monkeypatch):
 
 
 def test_unindex_takes_a_case_back_out_of_the_corpus(conn, monkeypatch):
-    # The eval's memory example indexes a resolution to test retrieval, then removes it (D23).
+    # The eval's memory example indexes a resolution to test retrieval, then removes it.
     deleted: list[str] = []
     monkeypatch.setattr(agent_index.dense, "delete", lambda cid: deleted.append(cid))
     _case(conn, "T-20260924-dddddd")

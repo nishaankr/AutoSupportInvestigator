@@ -3,9 +3,9 @@
 Not to be confused with the offline LangSmith evaluation: this gates one ticket's answer while
 it runs; the evaluation scores the whole system afterwards.
 
-1. Code rules G1–G3 (`graph/verification.py`) on every draft: no citing a case that isn't in
-   the evidence, a resolution must cite a supporting resolution-class case, and every
-   contradicting case must be acknowledged.
+1. Code rules G1–G4 (`graph/verification.py`) on every draft: no citing a case that isn't in
+   the evidence, a resolution must cite a supporting resolution-class case, every
+   contradicting case must be acknowledged, and a resolution carries no template placeholder.
 2. Confidence is computed without the pass/fail cap, to get the band the wording must respect.
 3. For drafts a model wrote (`resolve`), a separate model call looks for claims the cited cases
    don't back and for wording that promises more than the band allows ("this will fix it" at
@@ -63,7 +63,7 @@ def verify(state: AgentState, config: RunnableConfig) -> dict:
     preliminary = compute_confidence(evidence, assessment, None, tau_rel)
 
     if decision == "escalate":
-        # The escalation draft is assembled by code from state (D19): it can only cite
+        # The escalation draft is assembled by code from state: it can only cite
         # `evidence` entries and states no fix, so there is no model-written claim to check.
         judgement = VerificationJudgement()
     else:

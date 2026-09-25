@@ -1,4 +1,4 @@
-"""`get_ticket_by_id` (tools-and-skills.md §1, decisions.md D7) — small-to-big retrieval:
+"""`get_ticket_by_id` — small-to-big retrieval:
 search returns snippets, this returns the full record, dataset or agent-resolved/customer-
 history alike."""
 

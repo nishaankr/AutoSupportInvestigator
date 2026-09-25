@@ -4,7 +4,7 @@ Everything a good handoff needs is already in state: why it's escalating (the tr
 matched rule), what the investigator found (hypothesis, evidence, including what contradicts
 it), what the customer said, and what's still missing. Assembling it from those fields is
 cheaper than asking a model to rewrite them, and a template can only cite cases that are in
-the evidence, so it can't invent a fix or a case (decisions.md D19).
+the evidence, so it can't invent a fix or a case.
 
 The trigger is decided here and saved, rather than recomputed when the case is persisted:
 the `verify` pass over this very draft would otherwise change what the precedence rules pick.
@@ -22,7 +22,9 @@ _RULE_REASONS = {
                             "handled by a person by policy.",
     "dominant_cluster_escalated": "The closest historical cases for this problem were escalated to a specialist "
                                   "rather than resolved, so there is no attested fix to offer.",
-    "action_beyond_agent": "The fix needs an action the agent can't take itself",
+    # The investigator's own words follow; it names an action ("issue a refund") as often as a
+    # reason ("not enough detail"), so the label mustn't presume which.
+    "action_beyond_agent": "The investigator judged that a person needs to take this on",
 }
 
 

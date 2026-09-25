@@ -54,7 +54,7 @@ def tools_node(state: AgentState) -> dict:
         "messages": tool_messages,
         "tool_log": log_entries,
         "tool_calls_this_round": state.get("tool_calls_this_round", 0) + len(calls),
-        # The model's search query isn't the ticket; re-anchor before merging (D15 F1).
+        # The model's search query isn't the ticket; re-anchor before merging.
         "retrieved_cases": reanchor(new_cases, ticket_text(state["ticket"])) if new_cases else [],
     }
 

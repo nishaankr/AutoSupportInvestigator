@@ -16,7 +16,7 @@ def test_rrf_favours_documents_in_both_arms():
 
 def test_rrf_lexical_only_hit_can_outrank_weak_dense_hit_at_low_k():
     # A rank-1 lexical-only hit should be able to beat a weak (rank-50) dense-only hit at
-    # k=10 — this is exactly the structural property rag-design.md §7 chose k=10 for.
+    # k=10 — this is exactly the structural property k=10 was chosen for.
     dense = [f"d{i}" for i in range(1, 51)]
     lexical = ["lex1"]
     fused = reciprocal_rank_fusion([dense, lexical], k=10)

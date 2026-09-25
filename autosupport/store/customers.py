@@ -1,4 +1,4 @@
-"""Repository for the `customers` table (memory-design.md). Read by `load_memory`, written
+"""Repository for the `customers` table. Read by `load_memory`, written
 only by `update_memory`."""
 
 from __future__ import annotations

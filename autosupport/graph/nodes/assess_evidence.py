@@ -1,14 +1,14 @@
-"""Node 7: `assess_evidence` (graph-design.md §4.2, §5) — pure Python, no model call.
+"""Node 7: `assess_evidence` — pure Python, no model call.
 
 The judgement a second model used to make here (clusters, missing facts, clarification
 question, human-action flag) now arrives as part of `investigate`'s `submit_findings`
-(`state["findings"]`, decisions.md D19): the investigator has just reasoned over exactly these
+(`state["findings"]`): the investigator has just reasoned over exactly these
 cases, so asking another model to re-read them cost a call and added nothing. This node turns
 that judgement plus code metrics into a verdict, an escalation-rule check and `next_action`
 (`graph/assessment.py`).
 
 When the next action is `ask_user`, this node also marks the case `awaiting_user` — the node
-that routes *into* an interrupt does the side effect (graph-design.md §7.4).
+that routes *into* an interrupt does the side effect.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ def assess_evidence(state: AgentState, config: RunnableConfig) -> dict:
     tau_rel = run_setting(config, "tau_rel")
     relevant = logic.relevant_cases(state.get("retrieved_cases", []), tau_rel)
     evidence, findings = state.get("evidence", []), state["findings"]
-    slots = logic.askable_slots(findings.missing_slots)  # no secrets, at most 2 (D20)
+    slots = logic.askable_slots(findings.missing_slots)  # no secrets, at most 2
 
     relevant_ids = {c.case_id for c in relevant}
     clusters = [  # the model may cite a case that isn't relevant; drop it rather than trust it
@@ -39,7 +39,10 @@ def assess_evidence(state: AgentState, config: RunnableConfig) -> dict:
         relevant=relevant, tau_rel=tau_rel, clusters=clusters, evidence=evidence,
         missing_slots=slots, history_contradicts=findings.history_contradicts,
     )
-    slots = logic.thin_ticket_slots(state["ticket"].body, verdict, slots)
+    # Thin means thin *including* the customer's answers: judged on the body alone, a detailed
+    # answer once got the same generic question back.
+    said = " ".join([state["ticket"].body, *(t.answer for t in state.get("clarifications", []))])
+    slots = logic.thin_ticket_slots(said, verdict, slots)
     rule_hit = logic.escalation_rule_hit(
         classification=state["classification"], dom=dom, relevant=relevant,
         requires_human_action=findings.requires_human_action,

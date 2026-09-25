@@ -1,4 +1,4 @@
-"""Wires the nodes into the graph of graph-design.md §2 and compiles it with the SQLite
+"""Wires the nodes into the graph and compiles it with the SQLite
 checkpointer. Read `build_graph()` top to bottom to see the whole flow."""
 
 from __future__ import annotations

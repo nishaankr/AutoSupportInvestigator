@@ -1,10 +1,9 @@
-"""Builds `evals/examples.jsonl`: the five eval examples, one per behaviour pattern
-(evaluation-design.md §2), from real tickets in the corpus. Run it, check the printed
+"""Builds `evals/examples.jsonl`: the five eval examples, one per behaviour pattern, from real tickets in the corpus. Run it, check the printed
 evidence, commit the output:
 
     python -m evals.select_examples
 
-Every ticket used as input is one that retrieval can't return as itself: a cluster *member*
+Every corpus ticket used as input is one that retrieval can't return as itself: a cluster *member*
 (merged into a canonical at ingest, so never searchable) or a row outside the index. Otherwise
 the agent would retrieve the ticket's own historical answer at similarity 1.0. The member's
 canonical, or the named neighbours, are the known-good evidence the retrieval evaluator checks.
@@ -27,27 +26,37 @@ from autosupport.store import db as store_db
 READ_ONLY_TOOLS = ["search_similar_tickets", "get_ticket_by_id", "get_customer_history", "compute_queue_stats"]
 ALL_TOOLS = [*READ_ONLY_TOOLS, "escalate_ticket"]
 
+# The memory example's setup ticket; see its "why" for the reason it isn't from the corpus.
+MEMORY_FIRST_TICKET = {
+    "subject": "MongoDB 4.4 integration for our project management platform",
+    "body": "We're on the enterprise plan and run our services on AWS with MongoDB 4.4. We want to integrate "
+            "MongoDB 4.4 with your SaaS project management platform. What integration options are available "
+            "and where is the documentation? We prefer email updates.",
+}
+
 SELECTION = [
     {
         "example_id": "clean_resolution", "ticket": "HF-9322",
-        "why": "Member of the MongoDB-integration cluster HF-2958; 8 of its 9 relevant neighbours are "
-               "resolution-class, the strongest consistent resolution neighbourhood in the index.",
+        "why": "Member of the MongoDB-integration cluster HF-2958. On the full index 5 of its 10 relevant "
+               "neighbours are resolution-class and agree on the fix; the rest are escalated incident-style "
+               "tickets, which propose no rival fix.",
         "known_good": ["HF-2958"], "allowed_tools": READ_ONLY_TOOLS, "expect": {"outcome": "resolved"},
     },
     {
         "example_id": "clarification_needed", "ticket": "HF-49750",
         "why": "A 12-word report ('unusual decrease in engagement metrics') with no product, metric or "
-               "timeframe; 9 of its 10 relevant neighbours were answered with clarification requests.",
+               "timeframe; on the full index 6 of its 10 relevant neighbours were answered with clarification "
+               "requests and none with a fix.",
         "known_good": ["HF-12458"], "allowed_tools": READ_ONLY_TOOLS, "expect": {"outcome": "asked_clarification"},
     },
     {
         "example_id": "conflicting_evidence", "ticket": "HF-61377",
-        "why": "'Which analytics tools integrate with Evernote for investment optimisation' — its relevant "
-               "resolution neighbours solve the same-looking request differently: HF-43855 names concrete "
-               "tools (Tableau, Power BI, Python), HF-50033 (Xero) defers to a call-back, HF-54771 lists "
-               "Evernote-specific tools. The corpus has no sharper contradictions; this is the largest "
-               "measured divergence between near-identical requests' fixes.",
-        "known_good": ["HF-54771", "HF-50033", "HF-43855"], "allowed_tools": ALL_TOOLS,
+        "why": "'Which analytics tools integrate with Evernote for investment optimisation' — on the full index "
+               "its relevant resolution neighbours solve the same-looking request differently: HF-54514 lists "
+               "Evernote-specific tools, HF-54480 names concrete tools (Excel, Power BI), HF-50616 defers to "
+               "'we'll send a list and help set it up'. The corpus has no sharper contradictions; this is the "
+               "largest measured divergence between near-identical requests' fixes.",
+        "known_good": ["HF-54514", "HF-54480", "HF-50616"], "allowed_tools": ALL_TOOLS,
         "expect": {"verdict": "conflicting"},
     },
     {
@@ -57,14 +66,15 @@ SELECTION = [
         "known_good": ["HF-8283"], "allowed_tools": ALL_TOOLS, "expect": {"outcome": "escalated"},
     },
     {
-        "example_id": "memory_and_new_case", "ticket": "HF-59267", "first_ticket": "HF-3745",
-        "why": "First ticket HF-3745 ('options for integrating MongoDB 4.4 into a scalable SaaS project "
-               "management platform') sits on the HF-2958 neighbourhood that resolves reliably, and 'MongoDB "
-               "4.4' is a fact the memory policy keeps; it is resolved and accepted. Second ticket HF-59267, "
-               "same customer, asks for documentation on the same integration (cosine 0.920 to the first) and "
-               "is not in the index; it must load the remembered facts and retrieve the first ticket as "
-               "agent_resolved. (A first pick, HF-22907 on Docker Django security, escalated in the dry run: "
-               "the draft added security detail no cited case contained and verify rejected it twice.)",
+        "example_id": "memory_and_new_case", "ticket": "HF-3745", "first_ticket": MEMORY_FIRST_TICKET,
+        "why": "The first ticket is authored: the corpus almost never has a customer state their own "
+               "environment (4 of 11,868 cluster members do, none in a resolution neighbourhood), and corpus "
+               "tickets that only *ask about* MongoDB 4.4 were correctly not remembered as facts. It states plan, "
+               "deployment, version and a contact preference, on the HF-2958 MongoDB-integration resolution "
+               "neighbourhood; it is resolved and accepted (3/3 on the full index). The second ticket, HF-3745, "
+               "is real and held out: same customer, integration options for MongoDB 4.4 in the same platform. "
+               "It must load the remembered facts and retrieve the first ticket as agent_resolved (similarity "
+               "0.90, 3/3).",
         "known_good": ["$FIRST_TICKET", "HF-2958"], "allowed_tools": READ_ONLY_TOOLS,
         "expect": {"memory_loaded": True, "first_ticket_retrieved": True},
     },
@@ -102,9 +112,7 @@ def build() -> list[dict]:
             "holdout_ids": [spec["ticket"]],
         }
         if "first_ticket" in spec:
-            first = _row(spec["first_ticket"], conn, corpus)
-            example["inputs"]["first_ticket"] = {"subject": first["subject"], "body": first["body"]}
-            example["holdout_ids"].append(spec["first_ticket"])
+            example["inputs"]["first_ticket"] = spec["first_ticket"]
         examples.append(example)
     conn.close()
     return examples

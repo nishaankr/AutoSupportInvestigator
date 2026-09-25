@@ -1,4 +1,4 @@
-"""memory-design.md §4 write policy, enforced by `graph/memory.apply_update` (W1-W6)."""
+"""The memory write policy, enforced by `graph/memory.apply_update` (W1-W6)."""
 
 from __future__ import annotations
 

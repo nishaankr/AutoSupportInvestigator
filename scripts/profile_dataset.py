@@ -24,7 +24,7 @@ MAX_REPORT_LINES = 250
 TAG_COLUMNS = [f"tag_{i}" for i in range(1, 9)]
 TEXT_COLUMNS = ["subject", "body", "answer"]
 
-# Kept identical to rag-design.md §4.2's starting answer_class heuristic — if one
+# Kept identical to the starting answer_class heuristic — if one
 # changes, change both, so the profiling report stays a true check on the real rules.
 CLARIFICATION_PATTERNS = [
     r"could you (please )?(provide|specify|clarify|send|share|confirm)",
@@ -171,7 +171,7 @@ def build_report(raw: pd.DataFrame, en: pd.DataFrame) -> list[str]:
         emit(f"  {tag}: {c}")
     emit()
 
-    emit("ANSWER PATTERN HIT RATES (same patterns as rag-design.md §4.2)")
+    emit("ANSWER PATTERN HIT RATES (same patterns as the answer_class heuristic)")
     clar_n, clar_pct = _pattern_hit_rate(en["answer"], CLARIFICATION_PATTERNS)
     esc_n, esc_pct = _pattern_hit_rate(en["answer"], ESCALATION_PATTERNS)
     emit(f"  clarification-like: {clar_n} ({clar_pct:.1f}%)")

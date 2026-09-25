@@ -1,6 +1,6 @@
 """Nodes 8–9: `refine_retrieval` and `retrieve_variant` — a second, targeted round of retrieval.
 
-`refine_retrieval` picks up to three query variants (rag-design.md §10) and fans them out in
+`refine_retrieval` picks up to three query variants and fans them out in
 parallel with `Send`; each `retrieve_variant` runs the full hybrid search on its own, and the
 `merge_cases` reducer combines the results. Each variant's similarity is re-anchored to the
 ticket before merging, so every case is compared on the same scale.
@@ -39,7 +39,7 @@ def refine_retrieval(state: AgentState, config) -> Command:
 
 
 def select_variants(state: AgentState, config, anchor: str) -> list[dict]:
-    """rag-design.md §10 priority order V1, V2, V3, V4 — the first `MAX_VARIANTS` whose
+    """Priority order V1, V2, V3, V4 — the first `MAX_VARIANTS` whose
     trigger holds; V3 always fires."""
     tau_rel = run_setting(config, "tau_rel")
     relevant = logic.relevant_cases(state.get("retrieved_cases", []), tau_rel)
@@ -76,7 +76,7 @@ def _modal_queue(relevant) -> str | None:
 
 
 def hypothesis_query(state: AgentState, anchor: str) -> tuple[str, list[str]]:
-    """V3 in Python (decisions.md D19): the hypothesis already states the problem in the
+    """V3 in Python: the hypothesis already states the problem in the
     investigator's terms, so it *is* the rewritten query; its entities (products, versions,
     components — the same `ENTITY` pattern the clustering guard uses) plus the evidence
     summaries' become the forced BM25 phrases. No model call."""

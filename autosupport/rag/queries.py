@@ -1,6 +1,5 @@
 """Query construction and orchestration for hybrid retrieval — ties the dense arm
-(dense.py), the lexical arm (lexical.py) and fusion (fusion.py) into one `search()` call
-(rag-design.md §3, §6-§8; architecture.md §2)."""
+(dense.py), the lexical arm (lexical.py) and fusion (fusion.py) into one `search()` call."""
 
 from __future__ import annotations
 
@@ -16,7 +15,7 @@ from autosupport.store import cases as cases_repo
 from autosupport.store import db as store_db
 
 OVERFETCH = 50
-SNIPPET_CHARS = 600  # state-schema.md §1.2: retrieved cases carry snippets, not full text
+SNIPPET_CHARS = 600  # retrieved cases carry snippets, not full text
 _TAG_COLUMNS = [f"tag_{i}" for i in range(1, 9)]
 
 
@@ -36,7 +35,7 @@ class SearchResult:
     body_snippet: str
     answer_snippet: str
     tags: list[str] = field(default_factory=list)
-    source: str = "dataset"  # or "agent_resolved" (case-persistence.md §5)
+    source: str = "dataset"  # or "agent_resolved"
 
 
 def search(
@@ -47,14 +46,14 @@ def search(
     phrases: tuple[str, ...] | list[str] = (),
 ) -> list[SearchResult]:
     """Dense + BM25 -> RRF -> MMR, in one call. `where` is a single-key metadata filter
-    (e.g. `{"queue": "Technical Support"}` or `{"answer_class": "resolution"}`, rag-design.md
-    §10 V2/V4) applied to **both** arms — Chroma metadata on the dense side, the FTS5
+    (e.g. `{"queue": "Technical Support"}` or `{"answer_class": "resolution"}`, variants
+    V2/V4) applied to **both** arms — Chroma metadata on the dense side, the FTS5
     `UNINDEXED` columns on the lexical side — so a filtered variant never leaks unfiltered
     lexical hits. `phrases` are forced quoted BM25 matches (V1/V3).
 
     `similarity` in the result is cosine to *this query's* text. Graph nodes that merge
     results into `retrieved_cases` re-anchor it to the ticket (`dense.similarities_to`),
-    since state-schema.md §2.5 defines it as similarity to the ticket.
+    since state defines it as similarity to the ticket.
 
     `conn` lets a caller reuse an open connection; if omitted, one is opened and closed here.
     """
@@ -132,7 +131,7 @@ def _search(
 
 def _fetch_rows(conn: sqlite3.Connection, case_ids: list[str]) -> dict[str, dict]:
     """Display fields for each hit: `HF-` ids from `dataset_tickets`, `T-` ids (indexed
-    agent-resolved cases) from `cases` — the corpus grows at runtime (case-persistence.md §5)."""
+    agent-resolved cases) from `cases` — the corpus grows at runtime."""
     dataset_ids = [c for c in case_ids if c.startswith("HF-")]
     agent_ids = [c for c in case_ids if not c.startswith("HF-")]
     out: dict[str, dict] = {}

@@ -1,4 +1,4 @@
-"""`get_customer_history` (tools-and-skills.md §1, memory-design.md §3) — the current
+"""`get_customer_history` — the current
 customer's other cases. `customer_id` is bound by closure at tool-build time, never a
 model-supplied argument, so a ticket can only ever see its own customer's history."""
 

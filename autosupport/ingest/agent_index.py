@@ -1,4 +1,4 @@
-"""Indexing an agent-resolved case into the shared corpus (case-persistence.md §5): Chroma
+"""Indexing an agent-resolved case into the shared corpus: Chroma
 + FTS5 with `source="agent_resolved"`, so the next ticket can retrieve it exactly like a
 dataset canonical. Called by the `index_case` node, and by `ingest --rebuild` to restore
 agent cases after the dataset index is rebuilt."""

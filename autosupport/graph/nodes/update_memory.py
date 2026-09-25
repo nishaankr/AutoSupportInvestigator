@@ -1,7 +1,7 @@
 """Node 16: `update_memory` — decides what's worth remembering about this customer.
 
 The model only proposes a `MemoryUpdate`; `graph/memory.apply_update` applies the write policy
-(W1–W6, memory-design.md §4) in code, and only what survives is stored. A regex check runs
+(W1–W6) in code, and only what survives is stored. A regex check runs
 first, so the model is called only when the customer said something the policy could keep.
 It runs for every outcome, alongside `index_case`. A failed extraction is recorded in
 `errors`, which has a reducer, and never fails the ticket: the case is already saved.

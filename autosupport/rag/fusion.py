@@ -1,6 +1,5 @@
-"""Reciprocal Rank Fusion + MMR, written in-repo (CLAUDE.md constraint 4; decisions.md D4)
-rather than pulled from a library. Every constant here is measured, not a default —
-rag-design.md §7-§8 has the full sweep and the trade-off notes.
+"""Reciprocal Rank Fusion + MMR, written in-repo rather than pulled from a library. Every
+constant here is measured, not a default.
 """
 
 from __future__ import annotations
@@ -8,18 +7,18 @@ from __future__ import annotations
 import numpy as np
 
 RRF_K = 10  # not the literature default of 60 — that structurally can't let a lexical-only
-            # hit outrank a dense hit within 50-deep result lists (rag-design.md §7)
+            # hit outrank a dense hit within 50-deep result lists
 MMR_POOL = 30
 MMR_LAMBDA = 0.7  # chosen over 0.85 specifically because 0.85 swaps under half as many
-                  # results — MMR should still be doing real diversification (rag-design.md §8)
+                  # results — MMR should still be doing real diversification
 
 
 def reciprocal_rank_fusion(ranked_lists: list[list[str]], k: int = RRF_K) -> list[tuple[str, float]]:
     """`ranked_lists` is one ranked case_id list per retrieval arm — dense first by
     convention, since ties break toward the first list's own order. Returns (case_id, score)
     pairs sorted by fused score descending. `score` is ranking-only within this one call;
-    it is never comparable across two different queries' results (state-schema.md's
-    `merge_cases` keys on `similarity` instead, for exactly this reason)."""
+    it is never comparable across two different queries' results (`merge_cases` keys
+    on `similarity` instead, for exactly this reason)."""
     score: dict[str, float] = {}
     for ranked in ranked_lists:
         for rank, case_id in enumerate(ranked, start=1):

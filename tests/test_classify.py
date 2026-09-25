@@ -1,8 +1,8 @@
 """Regression guard for the answer_class heuristic against the 200-row hand-labelled
-validation fixture (docs/design/rag-design.md §5). Precision floors are set a little below
+validation fixture. Precision floors are set a little below
 the last measured values so real regressions are caught without the test being brittle to
 noise from an unchanged classifier. If a change to classify.py intentionally moves these
-numbers, re-measure and update both the floors here and rag-design.md §5."""
+numbers, re-measure and update the floors here."""
 
 import csv
 from pathlib import Path
@@ -11,7 +11,7 @@ from autosupport.ingest.classify import classify_answer
 
 FIXTURE = Path(__file__).parent / "fixtures" / "answer_class_validation.csv"
 
-# Last measured (see docs/design/rag-design.md §5): resolution 0.839 (n=31), escalation
+# Last measured: resolution 0.839 (n=31), escalation
 # 0.840 (n=50), clarification_request 0.885 (n=61).
 PRECISION_FLOOR = {
     "resolution": 0.75,

@@ -1,4 +1,4 @@
-"""`route_after_investigate` (graph-design.md §4.2)."""
+"""`route_after_investigate`."""
 
 from __future__ import annotations
 

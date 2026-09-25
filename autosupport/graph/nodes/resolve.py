@@ -4,7 +4,7 @@ It only writes prose: `investigate` already chose the evidence. It runs when the
 check says the evidence is enough, and again after a failed `verify` or a rejection — then the
 prompt carries the checker's objections or the customer's feedback, so the new draft actually
 differs from the one it replaces. The one model call a resolved ticket makes after
-`investigate` (fast tier, decisions.md D19).
+`investigate` (fast tier).
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ def resolve(state: AgentState) -> dict:
 
     # Rule G2 in `verify` rejects a resolution that cites no supporting resolution-class case.
     # Naming the qualifying IDs up front is cheaper than a failed check and a redraft — the 20B
-    # drafter otherwise often left the citations out (D22).
+    # drafter otherwise often left the citations out.
     citable = [e.case_id for e in state.get("evidence", []) if e.stance == "supports" and e.answer_class == "resolution"]
     if citable:
         extra += ("Your resolution MUST cite, in the form [case_id], at least one of these supporting cases: "
@@ -72,7 +72,7 @@ def resolve(state: AgentState) -> dict:
 def _with_sources(resolution: str, citable: list[str]) -> str:
     """Even when told which ids to cite, the drafter sometimes writes the answer from the
     evidence but leaves the `[case_id]` brackets out, and rule G2 then rejects an otherwise
-    sound draft twice over (D22). If none of the supporting cases is cited, list them at the
+    sound draft twice over. If none of the supporting cases is cited, list them at the
     end. This adds references, not trust: `verify`'s claim check still tests every claim
     against exactly these cases."""
     if not citable or any(f"[{c}]" in resolution for c in citable):

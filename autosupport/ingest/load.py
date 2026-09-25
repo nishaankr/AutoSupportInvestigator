@@ -1,9 +1,8 @@
-"""HF dataset -> English filter -> exact dedup -> local parquet snapshot
-(architecture.md §4.1.1; decisions.md D6; rag-design.md §1).
+"""HF dataset -> English filter -> exact dedup -> local parquet snapshot.
 
 `HF-<row>` uses the row's position in the *unfiltered* HF `train` split (61,765 rows), not
 its position after filtering — that position is stable across re-ingests regardless of
-future filtering changes, which a post-filter index wouldn't be (decisions.md D1).
+future filtering changes, which a post-filter index wouldn't be.
 """
 
 from __future__ import annotations
@@ -17,7 +16,7 @@ from autosupport.config import settings
 from autosupport.ingest.text import MIN_CONTENT_CHARS, derive_title, embed_text, index_text, index_body
 
 DATASET_NAME = "Tobi-Bueck/customer-support-tickets"
-# Eval holdout (evaluation-design.md §2): these tickets must never be indexed, or the agent
+# Eval holdout: these tickets must never be indexed, or the agent
 # would retrieve an eval ticket's own historical answer.
 HOLDOUT_PATH = Path(__file__).resolve().parents[2] / "evals" / "examples.jsonl"
 
@@ -50,7 +49,7 @@ def _load_and_prepare() -> pd.DataFrame:
         english["subject_ix"] + "|" + english["body_ix"] + "|" + english["answer_ix"]
     ).str.lower()
 
-    # Exact duplicates are a merge artifact of two dataset generations (rag-design.md §1):
+    # Exact duplicates are a merge artifact of two dataset generations:
     # keep the labelled-version copy, drop its unlabelled (version=None) twin.
     deduped = (
         english.sort_values("version_key", ascending=False, kind="stable")

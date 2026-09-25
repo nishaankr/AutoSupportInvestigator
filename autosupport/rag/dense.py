@@ -1,9 +1,9 @@
-"""Chroma similarity search — the dense arm of hybrid retrieval (rag-design.md §3, §7).
+"""Chroma similarity search — the dense arm of hybrid retrieval.
 
 Every result carries a true cosine similarity (`1 - distance`), not a ranking-only score —
 the collection is created with `hnsw:space: "cosine"` explicitly (ingest/index.py), since
-Chroma's default is squared L2, and `output-schema.md`'s confidence formula and
-`graph-design.md`'s `tau_rel` both compare against real cosine similarity.
+Chroma's default is squared L2, and the confidence formula and `tau_rel` both compare
+against real cosine similarity.
 """
 
 from __future__ import annotations
@@ -89,7 +89,7 @@ def similarities_to(case_ids: list[str], query_vector: np.ndarray) -> dict[str, 
 
 def similarity_to(case_id: str, query_vector: np.ndarray) -> float | None:
     """Cosine similarity between one specific case's stored embedding and `query_vector` —
-    used to backfill `RetrievedCase.similarity` for a lexical-only hit (rag-design.md §7),
+    used to backfill `RetrievedCase.similarity` for a lexical-only hit,
     which never went through `search()` and so never got a `distance` from Chroma."""
     record = _collection().get(ids=[case_id], include=["embeddings"])
     if not record["ids"]:

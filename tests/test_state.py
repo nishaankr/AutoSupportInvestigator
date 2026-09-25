@@ -1,4 +1,4 @@
-"""`merge_cases` and the `CaseResult` §5 validators (state-schema.md, output-schema.md)."""
+"""`merge_cases` and the `CaseResult` §5 validators."""
 
 from __future__ import annotations
 

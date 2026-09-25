@@ -1,4 +1,4 @@
-"""Turns the evidence a model cites into facts code can trust (output-schema.md §3.2).
+"""Turns the evidence a model cites into facts code can trust.
 
 The model only says *which* case and *what stance*. Everything else — the case's subject, its
 answer class, how many tickets it stands for, where it came from — is looked up here, so a
@@ -29,7 +29,7 @@ def enrich(
     seen: set[str] = set()
     for item in items:
         # A model sometimes lists the same case twice; the final CaseResult rejects duplicate
-        # ids, which crashed persist_case after the customer had accepted (D23). First one wins.
+        # ids, which crashed persist_case after the customer had accepted. First one wins.
         if item.case_id in seen:
             continue
         seen.add(item.case_id)
@@ -55,7 +55,7 @@ def enrich(
 
 def _lookup(conn: sqlite3.Connection, case_id: str) -> tuple[str, str, str | None, int] | None:
     """Returns (subject, source, answer_class, cluster_size), or None if `case_id` resolves
-    to nothing in SQLite (output-schema.md §3.1)."""
+    to nothing in SQLite."""
     if case_id.startswith("HF-"):
         row = conn.execute(
             "SELECT subject, answer_class, cluster_size FROM dataset_tickets WHERE case_id = ?", (case_id,)

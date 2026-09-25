@@ -1,9 +1,9 @@
-"""Near-duplicate canonicalisation (docs/design/rag-design.md §4; decisions.md D3).
+"""Near-duplicate canonicalisation.
 
 Star (leader) clustering over a kNN graph, not connected components: a member must be
 within T of its *canonical*, so there is no transitive chaining through intermediate
-members (rag-design.md §4 found connected components collapses the corpus into a handful
-of giant clusters). A neighbour only joins when it also passes the guard: same
+members (measured: connected components collapses the corpus into a handful of giant
+clusters). A neighbour only joins when it also passes the guard: same
 `answer_class`, answer-text similarity >= T_ANSWER, and no conflicting named entity —
 otherwise a "near-duplicate problem" with a different real answer would silently merge
 into one canonical and misrepresent `cluster_size` as agreement that never happened.

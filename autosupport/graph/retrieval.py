@@ -3,9 +3,9 @@
 re-anchoring `similarity` to the ticket.
 
 `rag.queries.search` reports cosine to *its own* query. For a hypothesis rewrite or a tool
-search that isn't the ticket, but state-schema.md §2.5 defines `RetrievedCase.similarity` as
+search that isn't the ticket, but `RetrievedCase.similarity` is defined as
 cosine to the ticket — `merge_cases` dedups on it and `assess_evidence` thresholds it against
-τ_rel, so mixing anchors would compare numbers on different scales (decisions.md D15 F1).
+τ_rel, so mixing anchors would compare numbers on different scales.
 """
 
 from __future__ import annotations
@@ -17,8 +17,8 @@ from autosupport.rag.embedder import embed
 from autosupport.rag.queries import SearchResult
 
 
-# Prompt budget (decisions.md D18): the LLM sees short snippets of the top cases and fetches a
-# full record with `get_ticket_by_id` only when it needs one (small-to-big, D7). State keeps the
+# Prompt budget: the LLM sees short snippets of the top cases and fetches a
+# full record with `get_ticket_by_id` only when it needs one (small-to-big). State keeps the
 # longer `SNIPPET_CHARS` snippets; only what is rendered into prompts is cut.
 PROMPT_CASES = 12
 PROMPT_SNIPPET_CHARS = 300

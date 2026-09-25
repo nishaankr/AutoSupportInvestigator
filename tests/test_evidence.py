@@ -1,9 +1,6 @@
-"""`graph/evidence.enrich` — dropping unknown IDs, then ordering and capping (output-schema.md
-§3.2-§3.3)."""
+"""`graph/evidence.enrich` — dropping unknown IDs, then ordering and capping."""
 
 from __future__ import annotations
-
-import sqlite3
 
 import pytest
 
@@ -86,7 +83,7 @@ def test_enrich_orders_by_stance_then_cluster_size_then_similarity(conn):
 
 
 def test_enrich_keeps_one_entry_per_case_id(conn):
-    # D23: a model cited the same case twice, and the duplicate crashed persist_case after acceptance.
+    # A model cited the same case twice, and the duplicate crashed persist_case after acceptance.
     items = [EvidenceItem(case_id="HF-1", summary="first", stance="supports"),
              EvidenceItem(case_id="HF-1", summary="again", stance="contradicts")]
     entries, errors = enrich(items, [], conn)

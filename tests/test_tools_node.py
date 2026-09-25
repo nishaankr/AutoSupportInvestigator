@@ -1,5 +1,5 @@
 """`graph/nodes/tools.py::tools_node` — executes model-requested tool calls, logs each one,
-and merges `search_similar_tickets` hits into `retrieved_cases` (tools-and-skills.md §1)."""
+and merges `search_similar_tickets` hits into `retrieved_cases`."""
 
 from __future__ import annotations
 
@@ -57,7 +57,7 @@ def test_tools_node_records_failure_without_crashing():
 
 
 def test_similarities_to_dedupes_ids_before_hitting_chroma(monkeypatch):
-    """Regression (found in the CP5 live run): two `search_similar_tickets` calls in one turn
+    """Regression (found in a live run): two `search_similar_tickets` calls in one turn
     can return the same case, and Chroma's `get` raises DuplicateIDError on repeated IDs."""
     import numpy as np
 

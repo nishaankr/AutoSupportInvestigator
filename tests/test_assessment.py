@@ -64,7 +64,7 @@ def test_conflicting_when_two_multi_case_clusters_split_the_weight():
 
 
 def test_noisy_queue_labels_no_longer_make_a_conflict():
-    # D21: the dataset's queue labels disagree on the same problem; that isn't competing fixes.
+    # The dataset's queue labels disagree on the same problem; that isn't competing fixes.
     rel = [case("HF-1", queue="a"), case("HF-2", queue="b"), case("HF-3", queue="c")]
     assert verdict(rel, [cluster("HF-1", "HF-2", "HF-3")], SUPPORT) == "sufficient"
 
@@ -79,6 +79,16 @@ def test_non_fix_clusters_do_not_compete_but_two_fixes_do():
                    SUPPORT) == "conflicting"  # 50/50 between two fixes
     assert verdict(rel[3:], [cluster("HF-4", "HF-5"), cluster("HF-6", "HF-7")],
                    [ev("HF-4"), ev("HF-5")]) == "insufficient"  # no cluster proposes a fix
+
+
+def test_support_is_counted_in_the_leading_fix_not_a_heavier_catch_all():
+    # The investigator lumped escalated leftovers into one group that outweighed the
+    # 3-case fix; counting supporters there found 0 and asked a pointless question.
+    rel = [case("HF-1"), case("HF-2"), case("HF-3"), case("HF-4", ans="escalation", size=16),
+           case("HF-5", ans="escalation", size=16), case("HF-6")]
+    clusters = [cluster("HF-1", "HF-2", "HF-3", label="fix"), cluster("HF-4", "HF-5", "HF-6", label="leftovers")]
+    assert A.dominant_cluster(clusters, rel)[0].label == "leftovers"
+    assert verdict(rel, clusters, [ev("HF-1"), ev("HF-2"), ev("HF-3")]) == "sufficient"
 
 
 def test_conflicting_when_customer_history_contradicts():
@@ -188,8 +198,23 @@ def test_grounding_rules_g1_g2_g3():
     assert any("HF-7" in i for i in grounding_issues(handoff, [], "escalate"))
 
 
+@pytest.mark.parametrize("text", [
+    "Docs: https://developer.example.com (replace with the actual link from the portal) [HF-1]",
+    "Call us on <tel_num> [HF-1]",
+    "Best regards, [Your Name] [HF-1]",
+])
+def test_grounding_rule_g4_placeholders(text):
+    issues = grounding_issues(DraftResponse(analysis="[HF-1]", resolution=text), [ev("HF-1")], "resolve")
+    assert any(i.startswith("G4") for i in issues)
+
+
+def test_grounding_rule_g4_leaves_real_text_alone():
+    text = "Visit the developer portal for the REST API reference [HF-1]; we can email examples."
+    assert grounding_issues(DraftResponse(analysis="[HF-1]", resolution=text), [ev("HF-1")], "resolve") == []
+
+
 def test_a_matched_rule_escalates_before_refining_or_asking():
-    # CP7 eval: rule-hit tickets were asking the customer instead of handing off (D18).
+    # An early eval found rule-hit tickets were asking the customer instead of handing off.
     assert A.next_action_for(verdict="insufficient", rule_hit="action_beyond_agent", gap_is_retrievable=True,
                              missing_slots=["error text"], retrieval_round=1, clarification_count=0,
                              max_retrieval_rounds=3, max_clarifications=2) == "escalate"
@@ -215,14 +240,14 @@ def test_investigate_context_shows_top_graph_cases_with_short_snippets():
 
 
 def test_askable_slots_drop_secrets_and_cap_at_two():
-    # D20: a live run asked the customer for their S3 access key and secret key.
+    # A live run asked the customer for their S3 access key and secret key.
     slots = ["Exact error message", "S3 credentials (access key/secret key)", "Bucket region", "Bucket policy"]
     assert A.askable_slots(slots) == ["Exact error message", "Bucket region"]
     assert A.askable_slots(["Your password", "API token"]) == []
 
 
 def test_verdict_explains_itself_in_plain_words():
-    # D22: the handoff states the code's reason, not the model's opinion of the evidence.
+    # The handoff states the code's reason, not the model's opinion of the evidence.
     why = A.verdict_for(relevant=THREE, tau_rel=TAU, clusters=[cluster("HF-1", "HF-2", "HF-3")],
                         evidence=[ev("HF-1")], missing_slots=[], history_contradicts=False)[3]
     assert "only 1 case(s) support" in why
@@ -237,6 +262,26 @@ def test_thin_ticket_gets_a_question_instead_of_an_unasked_escalation():
     assert A.thin_ticket_slots(thin, "insufficient", ["app version"]) == ["app version"]  # model's own slots win
     assert A.thin_ticket_slots(thin, "sufficient", []) == []
     assert A.thin_ticket_slots(" ".join(["word"] * 30), "insufficient", []) == []  # a detailed ticket isn't thin
+
+
+def test_a_detailed_answer_ends_the_generic_thin_ticket_question():
+    # Judged on the body alone, the demo's detailed answer got the same question back.
+    from autosupport.graph.nodes.assess_evidence import assess_evidence
+    from autosupport.graph.state import ClarificationTurn, Findings, TicketInput
+
+    answer = ("It's our project management web app's calendar sync with Google Calendar. Since yesterday "
+              "new tasks no longer show up in Google Calendar and nothing is shown in the app.")
+    state = {
+        "ticket": TicketInput(subject="App stopped syncing",
+                                  body="My app stopped syncing since yesterday. What do I do?"),
+        "classification": Classification(queue="Technical Support", type="Incident", priority="medium", tags=[],
+                                         rationale="r", neighbor_agreement=0.0),
+        "retrieved_cases": [case("HF-1", ans="clarification_request")],
+        "evidence": [], "findings": Findings(hypothesis="h", root_cause_category="other", reason="r"),
+        "clarifications": [ClarificationTurn(question="q", answer=answer)],
+    }
+    config = {"configurable": {"tau_rel": TAU, "max_retrieval_rounds": 3, "max_clarifications": 2}}
+    assert assess_evidence(state, config)["evidence_assessment"].missing_slots == []
 
 
 def test_resolution_without_citations_gets_its_sources_listed():

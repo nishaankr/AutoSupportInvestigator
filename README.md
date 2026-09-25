@@ -1,132 +1,104 @@
-# AutoSupport — Autonomous Support Investigation Agent
+<div align="center">
 
-A local LangGraph agent that takes a support ticket, investigates it against ~24K historical
-tickets with hybrid retrieval and its own tool calls, decides whether it has enough evidence,
-asks the customer when it doesn't, checks its own answer, and ends with a grounded resolution
-or a clean handoff to a person — then remembers the customer and learns from every accepted
-fix.
+# 🛠️ AutoSupport
 
----
+### Autonomous Support Investigation Agent
 
-## Stack
+*Investigates support tickets like a careful engineer: searches past cases, asks when it's
+unsure, checks its own answer, and remembers every customer.*
 
-| Layer | Choice |
-|---|---|
-| Language | Python 3.11+ |
-| Orchestration | LangGraph 1.x (`StateGraph`, `interrupt()`, `Send`) |
-| Checkpointer | `SqliteSaver` → `data/checkpoints.sqlite` |
-| Vector store (dense) | Chroma, embedded `PersistentClient` → `data/chroma/` |
-| Lexical index (sparse) | SQLite FTS5 (BM25), no BM25 library |
-| Structured store | SQLite → `data/autosupport.sqlite` |
-| Embeddings | local `sentence-transformers`, `BAAI/bge-small-en-v1.5` |
-| LLM | `init_chat_model`, provider set in `.env`. **Default: Groq `openai/gpt-oss-120b`** for both tiers and the eval judge; Anthropic Claude (Sonnet 5 / Haiku 4.5) is a one-line switch |
-| Interface | Typer CLI (`autosupport`) over a `service.py` layer |
-| Observability + evals | LangSmith |
-| Config | `pydantic-settings` reading `.env` |
-| Packaging | `pyproject.toml` + `uv.lock`, console script `autosupport` |
+![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
+![LangGraph](https://img.shields.io/badge/LangGraph-1.x-1C3C3C?logo=langchain&logoColor=white)
+![Chroma](https://img.shields.io/badge/Chroma-vector%20DB-FF6F61)
+![SQLite](https://img.shields.io/badge/SQLite-FTS5-003B57?logo=sqlite&logoColor=white)
+![Groq](https://img.shields.io/badge/LLM-Groq%20GPT--OSS-F55036)
+![LangSmith](https://img.shields.io/badge/Evals-LangSmith-1C3C3C)
+![Tests](https://img.shields.io/badge/tests-pytest-0A9EDC?logo=pytest&logoColor=white)
 
-The original stack locked Claude as the LLM. Groq was added and made the default after the
-evaluation measured it at ~45× lower cost per ticket with a better outcome score
-([decisions](docs/project/decisions.md) D18–D22).
+[Features](#-features) · [How it works](#-how-it-works) · [Setup](#-setup) ·
+[Commands](#-commands) · [Design](#-design) · [Evaluation](#-evaluation) ·
+[Further reading](#-further-reading) · [Example run](#-example-run)
+
+</div>
 
 ---
 
-## Repository layout
+AutoSupport searches **~24,000 historical tickets** for similar cases and decides whether the
+evidence is enough. When a fact is missing it **asks the customer**, and before answering it
+**verifies its reply** against the cases it cites. Every ticket ends with a **grounded, cited
+resolution** or a **clean handoff to a person**. It remembers each customer, and every fix a
+customer accepts becomes evidence for the next ticket.
 
-```text
-autosupport/
-├── cli.py            # Typer commands — rendering only
-├── service.py        # the only thing the CLI calls; returns Pydantic objects
-├── config.py         # every setting and key, validated at startup
-├── llm.py            # main / fast / judge models and provider quirks
-├── skills.py         # loads skills/*.md
-├── graph/            # state, nodes/, routers, build, and the pure logic modules
-│                     # (assessment, confidence, verification, memory, evidence, retrieval)
-├── tools/            # the five @tool functions
-├── rag/              # embedder, dense (Chroma), lexical (FTS5), fusion (RRF + MMR), queries
-├── store/            # SQLite repositories
-└── ingest/           # load, classify, cluster, index, agent_index
-skills/               # investigation.md, escalation.md, customer_response.md
-evals/                # held-out examples, evaluators, experiment runner
-scripts/demo.py       # the four required demo scenarios
-docs/design/          # one design doc per layer (start with architecture.md)
-docs/project/         # requirements, build plan, decision record
-tests/                # unit + graph tests with stubbed LLMs; no network needed
-data/                 # created at runtime, git-ignored
-```
+Built with **LangGraph**, hybrid retrieval (**Chroma + SQLite FTS5**), local embeddings and
+**Groq GPT-OSS** (Anthropic Claude also supported). Everything runs locally except the model API.
 
 ---
 
-## Prerequisites
+## ✨ Features
 
-| Need | Why |
-|---|---|
-| Python 3.11+ and [uv](https://docs.astral.sh/uv/) | Install and run |
-| A **Groq** API key on the **Dev tier** (or an Anthropic key) | The LLM. Groq's free tier caps GPT-OSS at 8K tokens/minute, and one investigation call can exceed that on its own |
-| A LangSmith API key | `autosupport eval` only. Tracing is **off by default**: the eval and `scripts/smoke_langsmith.py` switch it on for themselves, so normal runs never use trace quota (the free tier allows 5,000/month) |
-| Internet on first run | Downloads the Hugging Face dataset and the embedding model; both are cached afterwards |
-| ~2 GB disk | Dataset snapshot, embedding model, Chroma index |
+<table>
+<tr>
+<td width="50%" valign="top">
+
+#### 🔍 Investigates, not just looks up
+- **Agentic.** The model decides which of five tools to call and when; nothing is a fixed
+  sequence.
+- **Many cases, not the nearest one.** It weighs several historical cases and detects conflict
+  or missing evidence.
+- **Targeted re-search.** When evidence is thin, it runs up to three focused searches in
+  parallel.
+
+#### 💬 Asks, pauses, resumes
+- **One focused question** when a fact is missing, then it pauses.
+- **Saved to disk:** `resume` continues the same investigation, even from a new process.
+- **Customer sign-off:** accept the answer, or reject it with feedback for another look.
+
+#### ✅ Checks itself
+- **Self-verification:** every answer is checked against its cited cases before it's final.
+- **Citations on every claim** (`[case_id]`), plus a confidence score computed from the
+  evidence.
+
+</td>
+<td width="50%" valign="top">
+
+#### 🧠 Remembers and learns
+- **Case persistence:** every ticket is saved on arrival and tracked from open → resolved or
+  escalated.
+- **Short-term memory:** the ticket's conversation lives in a checkpointed thread.
+- **Long-term memory:** durable customer facts (product, version, plan, preferences, tried
+  fixes) carry over.
+- **Selective memory:** code rules, not the model, decide what's kept; never secrets or
+  guesses.
+- **Growing knowledge:** fixes customers accept are indexed and reused as evidence.
+
+#### 🛡️ Never gets stuck
+- **Bounded loops:** every loop has a limit and ends in a clean handoff.
+- **Graceful failures:** bad model output is retried, and a provider outage never loses a
+  ticket.
+
+#### ⚡ Practical
+- **Efficient:** about four model calls per ticket; the rest is plain Python.
+- **Live CLI:** every step is printed as it runs, ending in a clear result panel.
+
+</td>
+</tr>
+</table>
 
 ---
 
-## Setup
+## 🧭 How it works
 
-```bash
-git clone <repo> && cd AutoSupportInvestigationAgent
-uv sync                                  # creates .venv and installs everything
-cp .env.example .env                     # then fill in GROQ_API_KEY and LANGSMITH_API_KEY
-uv run autosupport ingest --limit 2000   # quick index (a few minutes); drop --limit for all ~24K (~36 min)
-uv run autosupport demo                  # the four required scenarios, end to end
-```
-
-`.env` and `data/` are git-ignored; `.env.example` lists every variable. Only the providers
-your model strings use need a key — config fails at startup, naming the missing variable.
-
----
-
-## Commands
-
-| Command | What it does |
-|---|---|
-| `autosupport ingest [--limit N] [--rebuild]` | Dataset → English filter → dedup → classify answers → cluster → SQLite + FTS5 + Chroma |
-| `autosupport new --customer C --subject S --body B` | Run a new ticket; prints the result or what it's waiting for |
-| `autosupport resume <id> --answer "..."` | Answer a clarification question (works from a fresh process) |
-| `autosupport resume <id> --accept` \| `--reject "why"` | Accept or reject a proposed resolution |
-| `autosupport show <id>` | The structured result (`CaseResult`) and status |
-| `autosupport list [--customer C] [--awaiting]` | Cases, optionally only those paused for the customer |
-| `autosupport memory <customer>` | What the agent remembers about a customer, with the ticket each fact came from |
-| `autosupport eval [--dataset NAME]` | Offline LangSmith evaluation (15 held-out tickets) |
-| `autosupport demo` | Scripted run of the four required scenarios (`scripts/demo.py`) |
-| `python scripts/smoke_langsmith.py` | Check LangSmith accepts traces (costs exactly one) |
-| `python scripts/smoke_llm.py` | Check every configured model answers |
-| `autosupport search "text"` | Inspect hybrid retrieval directly (ranks from each arm, fused score) |
-
-Every command takes `--json` and prints the underlying Pydantic object.
-
----
-
-## Architecture
-
-A deterministic lifecycle wrapped around an agentic core
-([architecture.md](docs/design/architecture.md), [graph-design.md](docs/design/graph-design.md)):
-
-- **The lifecycle is fixed edges.** Every ticket is persisted when it arrives, verified before
-  it's final, and persisted and indexed at the end, whatever the model does.
-- **The core is a ReAct loop.** `investigate` ⇄ `tools`: the model chooses which of five tools
-  to call and when, within a budget, and ends each round by calling `submit_findings`.
-- **Corrective RAG around it.** `assess_evidence` grades the findings in Python and routes to
-  resolve, search again (up to 3 parallel query variants via `Send`), ask the customer
-  (`interrupt()`), or hand off.
-- **Two human pauses.** `ask_user` (clarification) and `confirm_resolution` (accept/reject).
-  Both survive the process exiting: state is checkpointed to SQLite and `resume` picks it up.
-- **Only four steps call a model:** `investigate`, `resolve`, `verify`'s claim check, and
-  `update_memory` (only when there's something worth remembering). Classification, evidence
-  grading, query rewriting and the escalation handoff are Python (D19). A typical ticket makes
-  ~4 LLM calls.
-- **Every loop has a counter and a limit, and exhaustion always routes to `escalate`,** so the
-  graph terminates. The worst case measured 69 node executions against a recursion limit of 100.
-
-### Graph
+| | Step | What happens | Node |
+|:-:|---|---|---|
+| 1 | **Save** | The ticket is stored as an open case | `intake` |
+| 2 | **Remember** | The customer's profile and earlier tickets are loaded | `load_memory` |
+| 3 | **Retrieve** | Hybrid search returns the 10 most relevant historical cases | `retrieve_initial` |
+| 4 | **Classify** | Queue, type, priority and tags are voted from those cases | `triage` |
+| 5 | **Investigate** | The model reasons and calls tools, then submits a hypothesis with cited evidence | `investigate` ⇄ `tools` |
+| 6 | **Check evidence** | Enough → answer · fixable gap → search again · missing fact → **ask and pause** · otherwise → hand off | `assess_evidence` |
+| 7 | **Answer** | A cited resolution, or a structured escalation | `resolve` / `escalate` |
+| 8 | **Verify** | Claims are checked against the cited cases, and confidence is computed | `verify` |
+| 9 | **Persist and learn** | The case is saved, an accepted fix is indexed, and memory is updated | `persist_case` → `index_case` ∥ `update_memory` |
 
 ```mermaid
 flowchart TD
@@ -135,173 +107,366 @@ flowchart TD
     load_memory --> triage
     retrieve_initial --> triage
     triage --> investigate
-    investigate -- "tool calls, budget left" --> tools --> investigate
-    investigate -- "submit_findings / budget spent" --> assess_evidence
-    assess_evidence -- "escalation rule hit" --> escalate
+    investigate -- "tool calls" --> tools --> investigate
+    investigate -- "findings" --> assess_evidence
     assess_evidence -- "sufficient" --> resolve
     assess_evidence -- "gap fixable by search" --> refine_retrieval
     assess_evidence -- "fact only the customer has" --> ask_user
-    assess_evidence -- "budgets spent" --> escalate
-    refine_retrieval -. "Send × ≤3 variants" .-> retrieve_variant --> investigate
+    assess_evidence -- "rule hit / budgets spent" --> escalate
+    refine_retrieval -. "≤3 parallel searches" .-> retrieve_variant --> investigate
     ask_user -- "⏸ interrupt / ▶ resume" --> investigate
     resolve --> verify
     escalate --> verify
-    verify -- "passed, needs acceptance" --> confirm_resolution
-    verify -- "passed" --> persist_case
-    verify -- "unsupported: redo" --> investigate
-    verify -- "evidence too thin" --> refine_retrieval
+    verify -- "passed" --> confirm_resolution
+    verify -- "unsupported" --> investigate
     verify -- "retries spent" --> escalate
     confirm_resolution -- "⏸ accepted" --> persist_case
-    confirm_resolution -- "rejected + feedback" --> investigate
-    confirm_resolution -- "no revisions left" --> escalate
+    confirm_resolution -- "rejected" --> investigate
     persist_case --> index_case & update_memory
     index_case --> END([END])
     update_memory --> END
+
+    classDef llm fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+    classDef human fill:#fef3c7,stroke:#d97706,color:#78350f
+    classDef store fill:#dcfce7,stroke:#16a34a,color:#14532d
+    class investigate,resolve,verify,update_memory llm
+    class ask_user,confirm_resolution human
+    class intake,persist_case,index_case store
+```
+
+<sub>🔵 calls a model · 🟡 pauses for the customer · 🟢 writes to the database · the rest is plain Python</sub>
+
+Every finished ticket produces a structured result with six parts: **Classification** (queue, type,
+priority, tags), **Evidence** (the cited historical cases with summaries), **Analysis**,
+**Resolution**, **Escalation** (whether it's needed and why) and **Confidence**.
+
+---
+
+## 🚀 Setup
+
+You need [uv](https://docs.astral.sh/uv/) and a **Groq API key on the Dev tier** (an Anthropic
+key also works). A LangSmith key is only needed for `autosupport eval`.
+
+```bash
+# 1. Install uv
+#    Windows:      powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+#    macOS/Linux:  curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 2. Clone and install
+git clone https://github.com/nishaankr/AutoSupportInvestigator.git
+cd AutoSupportInvestigator
+uv sync
+
+# 3. Add your keys: copy the template, then set GROQ_API_KEY in .env
+cp .env.example .env                      # Windows: Copy-Item .env.example .env
+
+# 4. Check the model answers
+uv run python scripts/smoke_llm.py
+
+# 5. Build the index (downloads the dataset and embedding model on first run)
+uv run autosupport ingest --limit 2000    # a few minutes; drop --limit for all 23,795 tickets (~40 min)
+
+# 6. Run
+uv run autosupport new                    # prompts for customer id, subject and body
+uv run autosupport demo                   # four end-to-end scenarios
+```
+
+> [!TIP]
+> **If something's off:**
+> - **Editor shows imports as unresolved:** select `.venv` as the Python interpreter.
+> - **`VIRTUAL_ENV … does not match` warning:** run `deactivate` first.
+> - **Wrong model provider is called:** a shell variable overrides `.env`. Check with
+>   `env | grep AUTOSUPPORT` (PowerShell: `Get-ChildItem Env:AUTOSUPPORT*`).
+
+<details>
+<summary><b>Environment variables</b> (all in <code>.env</code>; keys stay out of git)</summary>
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `GROQ_API_KEY` | Groq models | required for the default setup |
+| `ANTHROPIC_API_KEY` | Claude models | only if a model is set to `anthropic:…` |
+| `LANGSMITH_API_KEY` | Evaluation runs | only for `autosupport eval` |
+| `LANGSMITH_TRACING` | Trace every run in LangSmith | `false` |
+| `AUTOSUPPORT_MAIN_MODEL` | Investigation model | `groq:openai/gpt-oss-120b` |
+| `AUTOSUPPORT_FAST_MODEL` | Drafting, verification, memory | `groq:openai/gpt-oss-120b` |
+| `AUTOSUPPORT_JUDGE_MODEL` | Evaluation judge | `groq:openai/gpt-oss-120b` |
+| `AUTOSUPPORT_EMBED_MODEL` | Local embedding model | `BAAI/bge-small-en-v1.5` |
+| `AUTOSUPPORT_DATA_DIR` | Databases and indexes | `./data` |
+
+`.env` and `data/` are git-ignored; only `.env.example`, with empty keys, is committed.
+
+</details>
+
+---
+
+## 💻 Commands
+
+| Command | What it does |
+|---|---|
+| `autosupport ingest [--limit N] [--rebuild]` | Build the search index from the dataset |
+| `autosupport new [--customer C --subject S --body B]` | Run a new ticket live (prompts for anything not passed) |
+| `autosupport resume <id> --answer "..."` | Answer a clarification question |
+| `autosupport resume <id> --accept` \| `--reject "why"` | Accept or reject a proposed resolution |
+| `autosupport show <id>` | Show a ticket's result, or what it's waiting for |
+| `autosupport list [--customer C] [--awaiting]` | List cases |
+| `autosupport memory <customer>` | What the agent remembers about a customer |
+| `autosupport eval` | Run the LangSmith evaluation |
+| `autosupport demo` | Run four scenarios end to end: normal resolution, clarification + resume, long-term memory reuse, and retrieval of a newly resolved case |
+
+Prefix each with `uv run`. Every command accepts `--json`.
+
+---
+
+## 🧱 Design
+
+### Architecture
+
+A fixed lifecycle wraps an agentic core:
+- **Fixed graph edges** handle what must always happen: save the ticket, verify the answer,
+  persist and index the result.
+- **A ReAct loop** in the middle, where the model decides what to do.
+- **Corrective RAG** routes on the evidence.
+- **Reflection** (`verify`) checks every answer.
+- **Human-in-the-loop** interrupts handle questions and sign-off.
+
+Only four steps call a model: `investigate`, `resolve`, `verify`'s claim check, and
+`update_memory`. Classification, evidence grading, query building and the handoff are Python.
+
+| Layer | Choice |
+|---|---|
+| Orchestration | LangGraph 1.x with a `SqliteSaver` checkpointer (pauses survive process exit) |
+| Retrieval | Chroma (dense) + SQLite FTS5 (BM25), fused with Reciprocal Rank Fusion, diversified with MMR |
+| Storage | SQLite for cases, customer memory and the dataset |
+| Embeddings | Local `BAAI/bge-small-en-v1.5` |
+| LLM | Groq `openai/gpt-oss-120b` by default; Anthropic Claude via `.env` |
+| Interface | Typer CLI over a `service.py` layer that returns Pydantic objects |
+| Evaluation | LangSmith |
+
+### State and memory
+
+| Kind | Where | Holds |
+|---|---|---|
+| ⏱️ Short-term | LangGraph state, checkpointed per step | One ticket's conversation, evidence snippets, findings and counters |
+| 📁 Case records | SQLite `cases` | Every ticket from arrival to final result |
+| 🧠 Long-term | SQLite `customers` | Durable facts, preferences, tried fixes, flags |
+
+**State design.**
+- **Typed state.** The graph state is a typed `AgentState` holding identity, conversation,
+  memory, classification, retrieved cases, findings, evidence, draft, verification and counters.
+- **Working memory, not the record.** It holds only what the current ticket needs: cases
+  carry short snippets, and full records are one tool call away. SQLite is the system of record.
+- **Safe parallel writes.** Keys written by parallel steps have merge reducers.
+- **Counters and limits.** Loop counters live in state and their limits in config.
+- **Durable pauses.** State is checkpointed after every step, so a pause survives the process
+  ending.
+
+The model only *proposes* what to remember. Code keeps an item only if the customer said it in
+their own words, it's a durable kind of fact, and it isn't sensitive.
+
+### Retrieval
+
+- **Corpus.** The English subset of `Tobi-Bueck/customer-support-tickets` is the only knowledge
+  source.
+- **Answer types.** Every historical answer is labelled at ingest as a resolution, a
+  clarification request or an escalation.
+- **Canonicals.** Near-duplicates collapse into one canonical case whose `cluster_size` counts
+  as evidence strength: **11,919 searchable cases**.
+- **Hybrid search.** Dense and keyword search are fused (RRF k=10) and diversified (MMR λ=0.7).
+- **Metadata.** Queue, type, priority, tags and answer type drive the classification vote and
+  filter the follow-up searches.
+- **Comparing evidence.** The relevant cases are grouped by the fix they propose, and code judges
+  the evidence **sufficient**, **conflicting** (competing fixes, none dominant) or
+  **insufficient**. The agent never copies the nearest ticket's answer.
+- **Grounding.** Answers must cite supporting cases; accepted agent resolutions join the index.
+
+### Tools and skills
+
+| Tool | The model uses it to… |
+|---|---|
+| `search_similar_tickets` | search again with different wording or a queue filter |
+| `get_ticket_by_id` | read a full historical case |
+| `get_customer_history` | see this customer's earlier tickets |
+| `compute_queue_stats` | see how common this kind of ticket is and how it's usually answered |
+| `escalate_ticket` | flag early that a person is needed |
+
+**Skills** are instruction files in `skills/`, loaded per step:
+- `investigation.md`: always loaded.
+- `escalation.md`: added for tickets that look escalation-bound.
+- `customer_response.md`: used for drafting.
+
+### Reliability
+
+- **Bounded loops:** tool calls (6 per round), retrieval rounds (3), questions (2), verification
+  attempts (2) and customer rejections (1) all have limits, and running out ends in a handoff.
+- **Recoverable errors:** malformed model output is retried, and a failing tool becomes an error
+  message the model works around.
+- **No lost tickets:** memory errors never fail a ticket, and a provider outage stops with a
+  clear message while the ticket stays saved.
+
+> [!NOTE]
+> Every node, routing rule, measurement and formula is documented in
+> **[ARCHITECTURE.md](ARCHITECTURE.md)**.
+
+---
+
+## 📊 Evaluation
+
+`autosupport eval` runs five examples, one per behaviour pattern, through the real graph in
+LangSmith. Latest results on the full index:
+
+| Evaluator | Score | Notes |
+|---|:-:|---|
+| Pattern behaviour | **0.80** | Resolved, asked, escalated and remembered correctly; missed the conflicting-evidence pattern |
+| Retrieval relevance | **1.00** | Known-good cases in the top 10, including a newly resolved agent case |
+| Tool usage | **1.00** | Only allowed tools, all successful, no repeats |
+| Groundedness (LLM judge) | **0.75** | One of three replies added detail its cases didn't contain |
+| Classification | **0.63** | Held down by inconsistent queue labels in the dataset |
+
+---
+
+## 🚧 Limitations
+
+- **It only knows customers it has met.** The historical tickets are anonymous, so everyone's
+  first ticket starts with a blank slate.
+- **Its labels are sometimes wrong.** Whether a past answer was a fix, a question or a handoff is
+  worked out by rules that are right about 84–89% of the time, so it occasionally asks when it
+  could have answered, or the other way round.
+- **"Near-duplicate" is a judgement call.** A tighter cut-off underrates how often a fix has
+  worked; a looser one lumps different problems together.
+- **It doesn't group its own answers.** Accept the same fix many times and the index gains
+  near-copies of it.
+- **One user at a time.** The local databases suit a CLI, not many concurrent users.
+- **Modest search quality.** A small offline embedding model and no re-ranker.
+- **Its self-check can be too forgiving.** It catches invented case numbers and placeholders, but
+  can pass reasonable-sounding detail its sources never said.
+- **Answers can vary between runs.** The same ticket may be resolved once and handed off the next
+  time; the limits keep it safe, not identical.
+- **It rarely spots genuine disagreement.** The dataset has few truly competing fixes.
+
+---
+
+## 🔮 Next improvements
+
+- 🔐 **Prompt-injection defence.** Ticket text and retrieved historical tickets reach the model
+  unchecked. Next: detect instruction-like content, mark untrusted text in prompts, and add
+  injection cases to the evaluation. (Today the damage is limited: the tools are read-only, the
+  customer id is fixed by code, and memory writes need the customer's own words.)
+- 🧪 **Poisoning safeguards.** False customer "facts" or a wrong accepted fix could mislead later
+  tickets. Add review, expiry or trust scores.
+- 🔑 **Output and access safety.** Scan replies for personal data, and add authentication with
+  per-customer isolation.
+- 🎯 **Answer quality.** A separate, stronger model for verification; a re-ranker; de-duplicating
+  the agent's own resolutions; a larger evaluation set.
+- 🌐 **Product.** A web interface on the existing service layer; Postgres for concurrent users.
+
+---
+
+## 📂 Project structure
+
+```text
+autosupport/        cli.py, service.py, config.py, llm.py
+├── graph/          state, nodes, routing, and the evidence, confidence and memory logic
+├── rag/            embeddings, Chroma, FTS5, fusion
+├── tools/          the five tools
+├── store/          SQLite repositories
+└── ingest/         dataset loading, answer labelling, clustering, indexing
+skills/             the three skill files
+evals/              evaluation dataset, evaluators, runner
+scripts/            demo and smoke tests
+tests/              114 tests with stubbed models (uv run pytest)
+ARCHITECTURE.md     detailed design reference
 ```
 
 ---
 
-## State and memory
+## 📚 Further reading
 
-Three kinds of memory, deliberately separate ([state-schema.md](docs/design/state-schema.md),
-[memory-design.md](docs/design/memory-design.md), [case-persistence.md](docs/design/case-persistence.md)):
-
-| | Where | Lifetime | Holds |
-|---|---|---|---|
-| **Working memory** | LangGraph state, checkpointed per superstep | One ticket (thread `customer:ticket`) | The conversation, retrieved-case *snippets*, findings, counters. Full case text is fetched on demand |
-| **System of record** | SQLite `cases` | Permanent | Every ticket, its status, and the final `CaseResult` |
-| **Long-term customer memory** | SQLite `customers` | Across tickets | Durable facts, preferences, fixes already tried, flags |
-
-**The memory write policy is code, not a prompt** (rules W1–W6). The model *proposes* facts;
-code keeps only items with a verbatim quote from what the *customer* wrote, from a closed set
-of keys (product, OS, version, plan, deployment, integration; contact channel, technical level,
-language; tried fixes). Code also drops anything secret or contact-PII-like. Facts overwrite
-by key, with provenance to the ticket that stated them; tried fixes accumulate; the
-`repeat_unresolved` flag is counted, not extracted. Parallel branches only ever write keys
-with reducers (`retrieved_cases`, `retrieval_queries`, `tool_log`, `messages`, `errors`).
-
----
-
-## RAG approach
-
-[rag-design.md](docs/design/rag-design.md) — every number there was measured on the corpus.
-
-- **Ingest.** English rows only; exact duplicates dropped (23,801 distinct records).
-  Near-duplicates are **canonicalised**: star clustering at cosine 0.92 with a guard on answer
-  class, answer similarity and conflicting entities, giving 11,903 canonicals on a full ingest. Each carries
-  `cluster_size`, which counts as evidence strength.
-- **Answer typing.** Every historical answer is typed at ingest as `resolution` /
-  `clarification_request` / `escalation`, by heuristics first. An LLM runs only on the
-  ambiguous ~10% residue, never over the whole corpus.
-- **Hybrid retrieval.** Dense (Chroma, cosine) + BM25 (FTS5, no stemming, so product names
-  like "NAS" survive) → **Reciprocal Rank Fusion** (k=10) → **MMR** (λ=0.7) for diversity.
-  RRF and MMR are written in-repo.
-- **Targeted re-retrieval.** Up to three parallel variants: the customer's clarification
-  answer, resolution-only, the hypothesis as a query, and queue-filtered.
-- **Relevance.** τ = 0.76, the measured random-pair 95th percentile. Similarity is always
-  re-anchored to the ticket, whichever query found the case.
-- **The corpus grows.** Resolutions the customer **accepts** are indexed as
-  `source="agent_resolved"` and retrieved like dataset cases. Escalated, rejected and
-  unconfirmed outcomes are never indexed.
-
----
-
-## Tools and skills
-
-[tools-and-skills.md](docs/design/tools-and-skills.md)
-
-| Tool | For |
+| Where | What you'll find |
 |---|---|
-| `search_similar_tickets(query, k, queue)` | A targeted search the initial retrieval didn't cover |
-| `get_ticket_by_id(case_id)` | The full record behind a snippet (small-to-big) |
-| `get_customer_history(limit)` | This customer's earlier tickets (customer bound by closure, never model-supplied) |
-| `compute_queue_stats(queue)` | Corpus-wide counts by type, priority and answer class |
-| `escalate_ticket(reason, target_queue)` | Flag early that a person is needed; feeds the escalation rules |
-
-Skills are Markdown files loaded per node, never one giant prompt:
-- `investigation.md` is always loaded.
-- `escalation.md` is layered on when `triage` flags the ticket as escalation-bound.
-- `customer_response.md` is used for drafting.
-
-Deleting a skill file fails loudly rather than silently changing behaviour.
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Every node and routing rule, the evidence verdicts, loop limits and failure handling, state and memory design, retrieval measurements, the confidence formula |
+| [`skills/`](skills/) | The three instruction files the agent loads while it works |
+| [`evals/`](evals/) | The evaluation examples, why each was chosen, and the five evaluators |
+| [`scripts/demo.py`](scripts/demo.py) | The four end-to-end demo scenarios |
+| [`tests/`](tests/) | 114 tests covering the graph paths, evidence rules, memory policy and retrieval |
 
 ---
 
-## Evaluation
+## 🎬 Example run
 
-`autosupport eval` runs **five real corpus tickets, one per behaviour pattern**, through the
-real graph and scores them in LangSmith ([evaluation-design.md](docs/design/evaluation-design.md),
-which also documents why each ticket was chosen). This is separate from the in-graph `verify`
-node: `verify` gates a single ticket, while the eval scores the system afterwards.
+One customer, two tickets (real output, trimmed).
 
-| Pattern | Ticket | Expected behaviour | First run |
-|---|---|---|---|
-| Clean resolution | HF-9322 (MongoDB integration) | resolves | ✓ resolved |
-| Clarification needed | HF-49750 (12-word "engagement drop") | asks one question, pauses | ✓ asked |
-| Conflicting evidence | HF-61377 (analytics tools, three different fixes) | verdict `conflicting` | ✗ judged `insufficient` |
-| Escalation-worthy | HF-7725 (high priority, Outage tags) | escalates | ✓ escalated |
-| Memory + newly resolved | HF-3745 → HF-59267, same customer | remembers, retrieves the first as `agent_resolved` | ✓ both |
+**① Ticket 1:** the self-check catches an unsupported claim, then the agent pauses for sign-off.
 
-Four evaluators are plain code: classification vs the dataset's labels (0.74), tool usage vs an
-expected tool set (1.0), retrieval of known-good cases (1.0), and pattern behaviour (0.8). One
-LLM judge, groundedness, checks each claim against the full cited cases (0.9 over the two
-resolutions). The run cost **7 LangSmith traces**: 5 pipeline runs plus one judge call per
-resolved example. Tracing is otherwise off.
+<details open>
+<summary><b>Show output</b></summary>
 
-An earlier 15-ticket version measured the cost work: $1.91 per run on the original Claude
-pipeline versus **$0.07 per run ($0.004 per ticket)** after D18–D22, with ~9 → 4.2 LLM calls per
-ticket.
+```text
+$ uv run autosupport new
+Customer ID: C-7342
+Subject: API integration options for our project management platform
+Body: We're on the enterprise plan and run our services on AWS with Node.js 18. [...] What
+      integration options are available and where is the documentation? We prefer email updates.
 
----
+[1/9] Persisting ticket as open case ................... done (T-20260925-f35b4c)
+[2/9] Loading customer memory + short-term state ....... done (new thread; no prior history for this customer)
+[3/9] Retrieving historical cases ...................... 10 cases, 5 relevant (top sim 0.88)
+[4/9] Classifying against historical evidence .......... Technical Support / Request / high
+[5/9] Investigating with tools + skills ................ calling get_ticket_by_id
+[6/9] Checking evidence sufficiency .................... sufficient, proceeding to resolution
+[7/9] Generating resolution ............................ done, cites HF-14977, HF-28545
+[8/9] Verifying against evidence ....................... not supported (attempt 1): To receive updates via email...
+[5/9] Investigating with tools + skills ................ calling search_similar_tickets
+[7/9] Generating resolution ............................ done, cites HF-14977, HF-28545
+[8/9] Verifying against evidence ....................... supported (attempt 2), confidence 0.85 (high)
 
-## Limitations
+PAUSED: proposed resolution, waiting for the customer to accept or reject it.
+  autosupport resume T-20260925-f35b4c --accept
+```
 
-- **No customer IDs in the source data.** The historical corpus is anonymous, so customer
-  history and long-term memory exist only for tickets created through the agent. The first
-  ticket from any customer starts with no memory.
-- **`answer_class` is heuristic, with measured, imperfect precision.** Measured on a blind
-  200-row sample:
+</details>
 
-  | Class | Precision | 95% CI |
-  |---|---|---|
-  | resolution | 0.839 | 0.674–0.929 |
-  | clarification_request | 0.885 | 0.782–0.943 |
-  | escalation | 0.840 | 0.715–0.917 |
+**② Sign-off:** the customer accepts in a new process; the answer is saved, indexed and remembered.
 
-  - The sample was labelled by Claude (blind to the heuristic's guess), not by a human.
-  - A mislabelled answer can route a resolvable ticket to "ask" or the reverse.
-  - Only ~1 in 8 historical answers is a real resolution, so grounded fixes are scarce by
-    nature.
-- **Clustering is threshold-based.** 0.92 plus a guard is a judgement call. Tighter would
-  understate agreement (`cluster_size` too small); looser would merge distinct cases and
-  inflate confidence. The sweep and the argument against the choice are in rag-design §4.
-- **Only canonicals are retrievable.** Cluster members are reachable by id but never surface
-  from search. That's what stops top-k returning five copies of one case, but the searchable
-  index (11,903 canonicals from 23,786 records) is smaller than the corpus. Accepted agent resolutions are *not*
-  canonicalised: accepting the same fix repeatedly adds near-identical cases.
-- **Single-process SQLite and Chroma.** Both are embedded and assume one writer: fine for a
-  local CLI, not for a multi-user service. Evals run sequentially for the same reason.
-- **Local embedding quality.** `bge-small-en-v1.5` is free, fast and offline, but weaker than
-  large API embeddings, and there is no reranker. The BM25 arm and MMR compensate partly; on a
-  heavily templated corpus, same-queue pairs barely outscore random ones.
-- **The self-check is model-based.** `verify` combines code rules with an LLM claim check. It
-  catches invented citations and overclaiming, but can't prove every sentence is supported.
-  With the defaults, the drafter and the checker are the same model, so the separation rests
-  on role and prompt rather than a second model.
-- **Model variance.** The same ticket can resolve in one run and escalate in the next, and
-  single-run eval differences on 15 tickets are noise-sized. The demo passed all four scenarios
-  in three consecutive runs only after D22 made its two weakest steps deterministic (citing
-  sources, asking on thin tickets). GPT-OSS also sometimes emits malformed tool calls or JSON;
-  they're resampled, and a round that still fails escalates instead of crashing.
-- **Noisy dataset labels cap classification.** Queue/priority labels disagree even across
-  near-identical tickets, so `classification_accuracy` can't approach 1 against them.
-- **The brief's example tickets are not in the repo.** The demo and eval use corpus-derived
-  tickets; the brief's drop into `scripts/demo.py` and `evals/brief_examples.json`.
+<details>
+<summary><b>Show output</b></summary>
 
----
+```text
+$ uv run autosupport resume T-20260925-f35b4c --accept
+[9/9] Persisting final case + indexing for retrieval ... saved as resolved
+      -> customer memory now: plan=enterprise, deployment=AWS, integration=API, contact_channel=email
+      -> indexed for future retrieval as source=agent_resolved
 
-## Further reading
+========================= CASE RESULT  T-20260925-f35b4c =========================
+Classification   Queue: Technical Support | Type: Request | Priority: high
+Evidence         [HF-14977] source=dataset | supports | resolution | cluster_size=8 | sim 0.88
+                 [HF-28545] source=dataset | supports | resolution | cluster_size=3 | sim 0.87
+Analysis         [...] No case mentions configuring email notifications, so that detail is omitted.
+Resolution       We support REST APIs [...] documented in our developer portal. [HF-14977] [HF-28545]
+Escalation       Not required
+Confidence       0.85 (high)
+```
 
-- [docs/project/decisions.md](docs/project/decisions.md) — every design decision, including
-  D18–D22 with before/after measurements.
-- [docs/design/](docs/design/) — one document per layer, reconciled with the built system.
+</details>
+
+**③ Ticket 2:** the same customer follows up without repeating their details.
+
+<details>
+<summary><b>Show output</b></summary>
+
+```text
+$ uv run autosupport new
+[2/9] Loading customer memory + short-term state ....... done (remembered plan=enterprise, deployment=AWS,
+      integration=API; prefers contact_channel=email; earlier tickets: T-20260925-f35b4c (resolved))
+[3/9] Retrieving historical cases ...................... 10 cases, 5 relevant; includes
+      T-20260925-f35b4c source=agent_resolved sim 0.85
+[7/9] Generating resolution ............................ done, cites HF-14977, HF-12085, T-20260925-f35b4c
+```
+
+</details>
+
+> [!NOTE]
+> **What this shows:**
+> - **Self-verification:** the first draft claimed an email feature no case mentions, and the
+>   check sent it back before the customer saw it.
+> - **Memory:** ticket 2 loaded the customer's details from ticket 1.
+> - **Growing knowledge:** ticket 1's accepted answer was retrieved and cited as evidence.

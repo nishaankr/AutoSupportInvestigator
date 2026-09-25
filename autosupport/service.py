@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import secrets
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Any, Callable, Literal
 
 from pydantic import BaseModel
 
@@ -41,39 +41,9 @@ def ingest(limit: int | None = None, rebuild: bool = False) -> IngestResult:
     )
 
 
-class SearchHit(BaseModel):
-    case_id: str
-    subject: str
-    queue: str
-    type: str
-    answer_class: str
-    cluster_size: int
-    similarity: float
-    score: float
-    dense_rank: int | None
-    lexical_rank: int | None
-
-
-def search(text: str, k: int = 10, queue: str | None = None) -> list[SearchHit]:
-    """Run hybrid retrieval on its own, outside the graph — handy for seeing why a ticket
-    did or didn't find a case."""
-    from autosupport.rag.queries import search as run_search
-
-    where = {"queue": queue} if queue else None
-    hits = run_search(text, k=k, where=where)
-    return [
-        SearchHit(
-            case_id=h.case_id, subject=h.subject, queue=h.queue, type=h.type,
-            answer_class=h.answer_class, cluster_size=h.cluster_size, similarity=h.similarity,
-            score=h.score, dense_rank=h.dense_rank, lexical_rank=h.lexical_rank,
-        )
-        for h in hits
-    ]
-
-
 class PendingInterrupt(BaseModel):
     """What a paused ticket is waiting for — the `interrupt()` payload of `ask_user` or
-    `confirm_resolution` (graph-design.md §7), read back from the checkpoint."""
+    `confirm_resolution`, read back from the checkpoint."""
 
     type: Literal["clarification", "confirmation"]
     question: str | None = None
@@ -93,6 +63,119 @@ class TicketOutcome(BaseModel):
     result: CaseResult | None
     pending_question: str | None
     interrupt: PendingInterrupt | None = None
+
+
+class StepEvent(BaseModel):
+    """One graph node finishing, as it happens: the node's name and the facts about what it
+    just did, lifted from its state update. The CLI decides how to word them."""
+
+    node: str
+    facts: dict[str, Any] = {}
+
+
+def _case_facts(cases: list, tau_rel: float) -> dict:
+    return {
+        "n": len(cases),
+        "relevant": sum(c.similarity >= tau_rel for c in cases),
+        "top": max((c.similarity for c in cases), default=0.0),
+        "agent_resolved": [(c.case_id, round(c.similarity, 3)) for c in cases if c.source == "agent_resolved"],
+    }
+
+
+def _step_facts(node: str, update: dict, ticket_id: str, tau_rel: float) -> dict:
+    """What each node just did, read from its update (or, for the two post-persist nodes that
+    write only to SQLite, from the database). Read-only: observing a run must not change it."""
+    if node == "intake":
+        return {"ticket_id": ticket_id, "thread_id": update.get("thread_id")}
+    if node == "load_memory":
+        profile, history = update.get("customer_profile"), update.get("customer_history", [])
+        return {
+            "facts": profile.facts if profile else {}, "preferences": profile.preferences if profile else {},
+            "tried_fixes": profile.tried_fixes if profile else [], "flags": profile.flags if profile else [],
+            "history": [(h.case_id, h.status) for h in history],
+        }
+    if node in ("retrieve_initial", "retrieve_variant"):
+        queries = update.get("retrieval_queries", [])
+        return {**_case_facts(update.get("retrieved_cases", []), tau_rel),
+                "label": queries[0].label if queries else None, "round": queries[0].round if queries else None,
+                "failed": update.get("errors", [])}
+    if node == "refine_retrieval":
+        return {"round": update.get("retrieval_round")}
+    if node == "triage":
+        c = update["classification"]
+        return {"queue": c.queue, "type": c.type, "priority": c.priority, "tags": c.tags,
+                "skills": update.get("active_skills", [])}
+    if node == "investigate":
+        findings = update.get("findings")
+        if findings is None:
+            calls = [m for m in update.get("messages", []) if getattr(m, "tool_calls", None)]
+            return {"tool_requests": [tc["name"] for tc in calls[-1].tool_calls] if calls else []}
+        evidence = update.get("evidence", [])
+        return {"submitted": True, "supporting": [e.case_id for e in evidence if e.stance == "supports"],
+                "evidence": len(evidence), "missing": findings.missing_slots}
+    if node == "tools":
+        return {"calls": [(t.name, t.ok, next((t.args[k] for k in ("query", "case_id", "queue", "reason")
+                                               if t.args.get(k)), ""))
+                          for t in update.get("tool_log", [])],
+                **_case_facts(update.get("retrieved_cases", []), tau_rel)}
+    if node == "assess_evidence":
+        a = update["evidence_assessment"]
+        return {"verdict": a.verdict, "next": a.next_action, "why": a.reason, "relevant": a.relevant_count,
+                "rule": a.escalation_rule_hit}
+    if node == "ask_user":
+        turns = update.get("clarifications", [])
+        return {"answer": turns[-1].answer if turns else None}
+    if node == "resolve":
+        from autosupport.graph.state import CITATION
+
+        return {"cites": list(dict.fromkeys(CITATION.findall(update["draft"].resolution)))}
+    if node == "escalate":
+        draft = update["draft"]
+        return {"trigger": update.get("escalation_trigger"),
+                "queue": draft.escalation.target_queue if draft.escalation else None}
+    if node == "verify":
+        v, cf = update["verification"], update["confidence"]
+        return {"passed": v.passed, "attempt": update.get("verify_attempts"),
+                "issues": [*v.issues, *v.unsupported_claims], "confidence": cf.value, "band": cf.band,
+                "awaiting": update.get("status") == "awaiting_user"}
+    if node == "confirm_resolution":
+        return {"acceptance": update.get("user_acceptance"), "feedback": update.get("user_feedback")}
+    if node == "persist_case":
+        return {"status": update.get("status")}
+    if node in ("index_case", "update_memory"):
+        from autosupport.store import cases as cases_repo
+        from autosupport.store import customers as customers_repo
+        from autosupport.store import db as store_db
+
+        conn = store_db.connect()
+        try:
+            row = cases_repo.get(conn, ticket_id)
+            if node == "index_case":
+                return {"indexed": row["indexed_at"] is not None, "status": row["status"]}
+            profile = customers_repo.get(conn, row["customer_id"])
+            return {"facts": profile.facts if profile else {}, "preferences": profile.preferences if profile else {},
+                    "tried_fixes": profile.tried_fixes if profile else [], "errors": update.get("errors", [])}
+        finally:
+            conn.close()
+    return {}
+
+
+def _drive(graph_input, config: dict, ticket_id: str, on_step: Callable[[StepEvent], None] | None) -> None:
+    """Run the graph. With `on_step`, stream it instead and report each node as it finishes —
+    the same execution, observed; without, a plain `invoke` exactly as before."""
+    from autosupport.graph.build import compiled_graph
+
+    graph = compiled_graph()
+    if on_step is None:
+        graph.invoke(graph_input, config)
+        return
+    tau_rel = config["configurable"]["tau_rel"]
+    for chunk in graph.stream(graph_input, config, stream_mode="updates"):
+        for node, update in chunk.items():
+            if node == "__interrupt__":
+                continue  # the pause itself is read from the checkpoint afterwards
+            update = update if isinstance(update, dict) else {}
+            on_step(StepEvent(node=node, facts=_step_facts(node, update, ticket_id, tau_rel)))
 
 
 class CaseListItem(BaseModel):
@@ -157,11 +240,11 @@ def _outcome(ticket_id: str, thread_id: str) -> TicketOutcome:
 def new_ticket(
     customer_id: str, subject: str, body: str,
     thread_id: str | None = None, require_acceptance: bool | None = None,
+    on_step: Callable[[StepEvent], None] | None = None,
 ) -> TicketOutcome:
     """Start a ticket and run it until it finishes or pauses. The offline eval is the only
     caller that overrides `thread_id` (to `eval:{run_id}:{example_id}`) and switches the
     acceptance step off."""
-    from autosupport.graph.build import compiled_graph
     from autosupport.graph.state import InputState, TicketInput
 
     ticket_id = _new_ticket_id()
@@ -171,19 +254,19 @@ def new_ticket(
         "customer_id": customer_id,
         "ticket": TicketInput(subject=subject, body=body),
     }
-    compiled_graph().invoke(input_state, _run_config(thread_id, ticket_id, customer_id, require_acceptance))
+    _drive(input_state, _run_config(thread_id, ticket_id, customer_id, require_acceptance), ticket_id, on_step)
     return _outcome(ticket_id, thread_id)
 
 
 def resume_ticket(
-    ticket_id: str, answer: str | None = None, accept: bool = False, reject: str | None = None
+    ticket_id: str, answer: str | None = None, accept: bool = False, reject: str | None = None,
+    on_step: Callable[[StepEvent], None] | None = None,
 ) -> TicketOutcome:
     """Continue a paused ticket from its checkpoint — possibly in a brand-new process. The
     input is checked here, at the edge: the ticket must exist and be waiting, and the caller
     must give what it's waiting for (an answer to a question, or accept/reject)."""
     from langgraph.types import Command
 
-    from autosupport.graph.build import compiled_graph
     from autosupport.store import cases as cases_repo
     from autosupport.store import db as store_db
 
@@ -214,7 +297,7 @@ def resume_ticket(
     finally:
         conn.close()
 
-    compiled_graph().invoke(Command(resume=resume), _run_config(thread_id, ticket_id, row["customer_id"]))
+    _drive(Command(resume=resume), _run_config(thread_id, ticket_id, row["customer_id"]), ticket_id, on_step)
     return _outcome(ticket_id, thread_id)
 
 
@@ -305,6 +388,20 @@ def ticket_trace(ticket_id: str) -> TicketTrace:
         tools_called=[t.name for t in values.get("tool_log", [])],
         evidence_ids=[e.case_id for e in values.get("evidence", [])],
     )
+
+
+def unindex_case(ticket_id: str) -> None:
+    """Take an accepted agent resolution back out of the search index (its `cases` row and the
+    customer's memory stay). Used by the demo and the eval so repeated runs don't pile up
+    near-identical agent cases, which aren't de-duplicated and crowd each other out."""
+    from autosupport.ingest.agent_index import unindex_agent_case
+    from autosupport.store import db as store_db
+
+    conn = store_db.connect()
+    try:
+        unindex_agent_case(conn, ticket_id)
+    finally:
+        conn.close()
 
 
 class DemoScenario(BaseModel):

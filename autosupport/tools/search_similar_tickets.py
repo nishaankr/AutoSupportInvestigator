@@ -1,4 +1,4 @@
-"""`search_similar_tickets` (tools-and-skills.md §1) — targeted, mid-investigation retrieval,
+"""`search_similar_tickets` — targeted, mid-investigation retrieval,
 distinct from `retrieve_initial`'s one broad pass. Runs the full hybrid pipeline."""
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ def search_similar_tickets(query: str, k: int = 8, queue: str | None = None) -> 
             "priority": h.priority, "answer_class": h.answer_class, "cluster_size": h.cluster_size,
             "similarity": h.similarity, "score": h.score,
             # Short snippets: the result stays in the conversation for every later turn;
-            # `get_ticket_by_id` gives the full record when one case matters (D18).
+            # `get_ticket_by_id` gives the full record when one case matters.
             "body_snippet": h.body_snippet[:PROMPT_SNIPPET_CHARS],
             "answer_snippet": h.answer_snippet[:PROMPT_SNIPPET_CHARS], "tags": h.tags,
         }

@@ -6,3 +6,11 @@ __pycache__/
 .pytest_cache/
 dist/
 *.egg-info/
+
+# Not part of this Python project (a stray npm install); never push it.
+node_modules/
+package-lock.json
+
+# Local working notes and generated reports; not part of the published project.
+docs/
+CLAUDE.md

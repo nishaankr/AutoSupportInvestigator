@@ -1,7 +1,6 @@
-"""SQLite connection + schema for `data/autosupport.sqlite` (architecture.md §2.2,
-case-persistence.md, memory-design.md).
+"""SQLite connection + schema for `data/autosupport.sqlite`.
 
-Plain `sqlite3`, no ORM — five tables don't need one (CLAUDE.md dependency policy).
+Plain `sqlite3`, no ORM: five tables don't need one.
 """
 
 from __future__ import annotations

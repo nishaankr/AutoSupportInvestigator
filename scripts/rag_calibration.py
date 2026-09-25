@@ -1,15 +1,15 @@
-"""RAG calibration harness. Every number in docs/design/rag-design.md comes from this run.
+"""RAG calibration harness. The retrieval numbers in the README come from this run.
 
 Reads the English snapshot written by scripts/profile_dataset.py and applies the
 normalisation, exact dedup, answer_class heuristic and star clustering exactly as
-rag-design.md specifies them. It then measures the retrieval parameters in memory: a numpy
+ingest does. It then measures the retrieval parameters in memory: a numpy
 matrix stands in for Chroma, and FTS5 is a real in-memory SQLite table. Nothing is persisted
 except the report. The full corpus takes roughly 16 minutes on CPU, mostly embedding.
 
 This is calibration tooling, not the ingest pipeline. It imports normalisation and
 classification from autosupport.ingest — never a second copy — after an earlier version of
 this file had its own inline copy of the answer_class patterns that silently drifted from
-ingest/classify.py once that module got revised during CP1c validation. One definition only.
+ingest/classify.py once that module was revised. One definition only.
 
 Usage: python scripts/rag_calibration.py [--limit N]
 """
@@ -141,7 +141,7 @@ def random_pair_sims(E: np.ndarray, n: int = 1500) -> np.ndarray:
     return S[np.triu_indices(len(idx), 1)]
 
 
-# ---------- star clustering (rag-design.md §4) ----------
+# ---------- star clustering ----------
 class Clusterer:
     def __init__(self, d: pd.DataFrame, E: np.ndarray, EA: np.ndarray, nbr: np.ndarray, sim: np.ndarray):
         self.E, self.EA, self.nbr, self.sim = E, EA, nbr, sim
@@ -229,7 +229,7 @@ def report_similarity_and_clustering(d, E, EA, nbr, sim, out: Report) -> Cluster
     return c
 
 
-# ---------- retrieval (rag-design.md §6-§9) ----------
+# ---------- retrieval ----------
 class Retriever:
     def __init__(self, d: pd.DataFrame, E: np.ndarray, canon: np.ndarray):
         self.d, self.E, self.canon = d, E, canon
@@ -398,6 +398,7 @@ def main() -> None:
     report_retrieval(d, E, clusterer.star(CLUSTER_T), out)
     out.progress("done")
 
+    REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     REPORT_PATH.write_text("\n".join(out.lines) + "\n", encoding="utf-8")
     print(f"\nReport written: {REPORT_PATH}")
 

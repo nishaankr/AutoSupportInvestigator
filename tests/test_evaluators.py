@@ -1,4 +1,4 @@
-"""The code-only offline evaluators (evaluation-design.md §4) and the ingest holdout."""
+"""The code-only offline evaluators and the ingest holdout."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""`triage._neighbor_agreement` (state-schema.md §2.4, F4 in the CP3 plan): the modal
+"""`triage._neighbor_agreement`: the modal
 queue's unweighted share of the initial retrieval round."""
 
 from __future__ import annotations

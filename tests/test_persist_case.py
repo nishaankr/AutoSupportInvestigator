@@ -1,5 +1,5 @@
 """`persist_case` — `stats.tool_calls` must reflect `tool_log`, not a hardcoded 0
-(regression: found via the CP4 live verification run, where 3 tool calls were logged but
+(regression: found in a live verification run, where 3 tool calls were logged but
 persisted as 0)."""
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ from autosupport.graph.state import (
 @pytest.fixture
 def sqlite_env(tmp_path, monkeypatch):
     from autosupport.config import settings
-    from autosupport.store import cases as cases_repo
     from autosupport.store import db as store_db
 
     monkeypatch.setattr(settings, "data_dir", tmp_path)

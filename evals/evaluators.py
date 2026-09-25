@@ -1,4 +1,4 @@
-"""The offline evaluators (evaluation-design.md §4). Unrelated to the in-graph `verify` node:
+"""The offline evaluators. Unrelated to the in-graph `verify` node:
 these never run inside a ticket and never change its outcome.
 
 Everything is plain code except `response_groundedness`, the one LLM-as-judge, which is also
@@ -147,8 +147,8 @@ def response_groundedness(inputs: dict, outputs: dict, reference_outputs: dict) 
 
 # ---------- pattern_behaviour (code) ----------
 def pattern_behaviour(inputs: dict, outputs: dict, reference_outputs: dict) -> dict:
-    """Did the agent do what the example's pattern calls for (REQUIREMENTS §8 "overall
-    behaviour")? Each expectation in `reference["expect"]` is checked; the score is the share met."""
+    """Did the agent do what the example's pattern calls for (overall
+    behaviour)? Each expectation in `reference["expect"]` is checked; the score is the share met."""
     key = "pattern_behaviour"
     if _run_failed(outputs):
         return _skip(key, "run failed")

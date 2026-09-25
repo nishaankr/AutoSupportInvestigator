@@ -1,4 +1,5 @@
-"""`compute_confidence` against the five worked examples in output-schema.md §4.7."""
+"""`compute_confidence` against five worked examples: strong, contested, thin, a well-diagnosed
+escalation, and an escalation with no resolution-class support."""
 
 from __future__ import annotations
 
